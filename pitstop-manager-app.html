@@ -715,7 +715,7 @@ function sidebarHtml(){
     const attr = it.filled ? (active?`fill="${col}"`:`fill="none" stroke="${col}" stroke-width="1.4"`) : `stroke="${col}" stroke-width="1.4" fill="none" stroke-linejoin="round" stroke-linecap="round"`;
     return `<button class="side-item ${active?'active':''}" onclick="switchTab('${it.id}')"><svg width="19" height="19" viewBox="0 0 18 19" ${attr}>${it.svg}</svg><span>${it.label}</span></button>`;
   }).join('');
-  return `<aside class="sidebar"><div class="side-logo"><span>PITSTOP</span> <span style="color:var(--accent);">MANAGER</span></div><nav class="side-nav">${links}</nav><div class="side-foot">v1.4 · données locales</div></aside>`;
+  return `<aside class="sidebar"><div class="side-logo"><span>PITSTOP</span> <span style="color:var(--accent);">MANAGER</span></div><nav class="side-nav">${links}</nav><div class="side-foot">v1.4.2 · données locales</div></aside>`;
 }
 function headerMeta(t){
   if(t==='home'){ const greet = settings.name ? `Bonjour ${settings.name}` : 'Ton parc'; return {title:greet, sub:'Vue d\'ensemble de ton parc'}; }
@@ -1124,7 +1124,7 @@ function viewProfil(){
       : `<button class="btn btn-primary" onclick="activateSync()">Activer la synchronisation</button>`}
     <div style="font-size:10.5px;color:var(--t3);line-height:1.5;margin-top:10px;">Le token est stocké uniquement sur cet appareil et n'est jamais inclus dans les exports. Crée-le sur GitHub → Settings → Developer settings → Fine-grained tokens, limité à ce seul dépôt.</div>
 
-    <div style="text-align:center;margin-top:24px;"><div style="font-family:var(--f-display);font-size:18px;font-weight:800;letter-spacing:0.04em;color:var(--t3);">PITSTOP <span style="color:var(--accent);">MANAGER</span></div><div style="font-family:var(--f-data);font-size:10px;color:var(--t3);letter-spacing:0.12em;margin-top:3px;">v1.4</div></div>
+    <div style="text-align:center;margin-top:24px;"><div style="font-family:var(--f-display);font-size:18px;font-weight:800;letter-spacing:0.04em;color:var(--t3);">PITSTOP <span style="color:var(--accent);">MANAGER</span></div><div style="font-family:var(--f-data);font-size:10px;color:var(--t3);letter-spacing:0.12em;margin-top:3px;">v1.4.2</div></div>
   </div>`;
 }
 
@@ -1333,8 +1333,9 @@ function modalFuelAll(){
 }
 function modalExport(){
   const json = buildExport();
-  return `<div class="modal-title">EXPORTER MES DONNÉES</div><div class="modal-desc">Sauvegarde complète de ton parc au format JSON. Télécharge le fichier ou copie le texte pour le conserver ailleurs.</div>
-    <div class="btn-row" style="margin-top:0;"><button class="btn btn-primary" onclick="exportDownload()">Télécharger .json</button><button class="btn btn-secondary" onclick="exportCopy()">Copier</button></div>
+  const warn = (sync.token) ? `<div class="empty" style="border-style:solid;border-color:rgba(245,158,11,0.3);color:var(--warn);text-align:left;margin-bottom:12px;font-size:11px;line-height:1.5;">Ce fichier contient ton token de synchronisation : garde-le privé, ne le partage pas publiquement.</div>` : '';
+  return `<div class="modal-title">EXPORTER MES DONNÉES</div><div class="modal-desc">Sauvegarde complète de ton parc au format JSON, configuration de synchronisation incluse. Télécharge le fichier ou copie le texte pour le conserver ailleurs.</div>
+    ${warn}<div class="btn-row" style="margin-top:0;"><button class="btn btn-primary" onclick="exportDownload()">Télécharger .json</button><button class="btn btn-secondary" onclick="exportCopy()">Copier</button></div>
     <div class="field" style="margin-top:14px;"><textarea id="export-ta" readonly style="height:170px;resize:none;font-family:var(--f-data);font-size:10px;color:var(--t2);line-height:1.5;">${escapeHtml(json)}</textarea></div>
     <button class="btn btn-secondary" onclick="closeModal()">Fermer</button>`;
 }
@@ -1578,7 +1579,7 @@ function saleCopy(){
 }
 
 /* export */
-function buildExport(){ return JSON.stringify({app:'PitStop Manager', version:3, exportedAt:new Date().toISOString(), settings, nextId, vehicles}, null, 2); }
+function buildExport(){ return JSON.stringify({app:'PitStop Manager', version:3, exportedAt:new Date().toISOString(), settings, nextId, vehicles, sync:{ repo:sync.repo||'', token:sync.token||'', enabled:!!sync.enabled }}, null, 2); }
 function exportDownload(){
   try{
     const blob = new Blob([buildExport()], {type:'application/json'});
@@ -1655,12 +1656,18 @@ function applyImport(data){
   const count = data.vehicles.length;
   confirmDialog('Importer les données', `${count} véhicule(s) détecté(s). Tes données actuelles seront remplacées. Continuer ?`, 'Importer', ()=>{
     vehicles = data.vehicles;
-    settings = Object.assign({name:'',warnKm:1500,warnHours:10,warnDays:30}, data.settings||{});
+    settings = Object.assign({name:'',warnKm:1500,warnHours:10,warnDays:30,warnConsPct:25}, data.settings||{});
     nextId = data.nextId || 600;
+    if(data.sync && (data.sync.repo || data.sync.token)){
+      sync.repo = data.sync.repo || '';
+      sync.token = data.sync.token || '';
+      sync.enabled = !!data.sync.enabled;
+      sync.lastError = '';
+    }
     migrate();
     // garantit un nextId supérieur à tous les ids présents
     let maxId = 0;
-    vehicles.forEach(v=>{ maxId=Math.max(maxId, v.id||0); ['recos','history','deadlines','fuelLogs'].forEach(k=>(v[k]||[]).forEach(x=>maxId=Math.max(maxId, x.id||0))); });
+    vehicles.forEach(v=>{ maxId=Math.max(maxId, v.id||0); ['recos','history','deadlines','fuelLogs','usageLog'].forEach(k=>(v[k]||[]).forEach(x=>maxId=Math.max(maxId, x.id||0))); });
     if(nextId <= maxId) nextId = maxId + 1;
     save(); state.tab='garage'; state.vehicleId=null; render(); toast('Données importées');
   });
@@ -1767,9 +1774,12 @@ async function syncPull(silent){
   finally{ _syncing=false; flushPending(); }
 }
 
-/* Renvoie un push en attente une fois le verrou libéré et la connexion dispo */
+/* Renvoie un push en attente une fois le verrou libéré et la connexion dispo.
+   Pas de relance après une erreur (évite une boucle) : on réessaiera à la
+   prochaine modification, au retour en ligne, ou à la réouverture. */
 function flushPending(){
-  if(_pendingPush && syncReady() && !_syncing && !(typeof navigator!=='undefined' && navigator.onLine===false)){
+  if(_pendingPush && syncReady() && !_syncing && !sync.lastError
+     && !(typeof navigator!=='undefined' && navigator.onLine===false)){
     setTimeout(()=>syncPush(true), 60);
   }
 }
