@@ -1115,8 +1115,8 @@ function viewProfil(){
 
     <div class="sec-title" style="margin-top:24px;">Synchronisation</div>
     <div style="font-size:11px;color:var(--t3);line-height:1.5;margin-bottom:12px;">Sauvegarde automatique dans un dépôt GitHub <b>privé</b>, pour retrouver tes données sur tes autres appareils. L'app reste utilisable hors-ligne ; l'envoi se fait dès qu'une connexion est disponible.</div>
-    <div class="field"><label class="field-label">Dépôt (utilisateur/nom)</label><input id="sync-repo" placeholder="Lookman0809/pitstop-data" value="${escapeHtml(sync.repo||'')}" onchange="saveSyncField('repo',this.value)"></div>
-    <div class="field"><label class="field-label">Token d'accès <span style="color:var(--t3);">(fine-grained, Contents: read & write)</span></label><input id="sync-token" type="password" placeholder="github_pat_…" value="${escapeHtml(sync.token||'')}" onchange="saveSyncField('token',this.value)"></div>
+    <div class="field"><label class="field-label">Dépôt (utilisateur/nom)</label><input id="sync-repo" value="${escapeHtml(sync.repo||'')}" onchange="saveSyncField('repo',this.value)"></div>
+    <div class="field"><label class="field-label">Token d'accès <span style="color:var(--t3);">(fine-grained, Contents: read & write)</span></label><input id="sync-token" type="password" value="${escapeHtml(sync.token||'')}" onchange="saveSyncField('token',this.value)"></div>
     <div style="font-size:12px;color:var(--t2);margin:2px 0 12px;">État : <span id="sync-status">${syncStatusHtml()}</span></div>
     ${sync.enabled
       ? `<button class="btn btn-secondary" onclick="syncNow()"><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9M13.5 2v3h-3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>Synchroniser maintenant</button>

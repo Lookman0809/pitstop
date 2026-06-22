@@ -1,5 +1,5 @@
 /* PitStop Manager - service worker (cache hors-ligne) */
-const CACHE = 'pitstop-1.4';
+const CACHE = 'pitstop-1.4.1';
 
 /* Fichiers locaux préchargés à l'installation */
 const ASSETS = [
