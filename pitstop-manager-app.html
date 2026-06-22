@@ -269,6 +269,8 @@ let vehicles = [];
 let settings = {};
 let nextId = 600;
 let onboarded = false;
+let dataUpdatedAt = 0;
+let sync = { repo:'', token:'', enabled:false, lastSync:0, lastError:'' };
 
 function migrate(){
   vehicles.forEach(v=>{
@@ -291,6 +293,8 @@ function load(){
       settings = Object.assign({name:'',warnKm:1500,warnHours:10,warnDays:30,warnConsPct:25}, d.settings||{});
       nextId = d.nextId || 600;
       onboarded = !!d.onboarded;
+      dataUpdatedAt = d.dataUpdatedAt || 0;
+      sync = Object.assign({repo:'', token:'', enabled:false, lastSync:0, lastError:''}, d.sync||{});
       migrate(); return;
     }
   }catch(e){ console.warn('Lecture stockage impossible', e); }
@@ -298,9 +302,14 @@ function load(){
   vehicles = d.vehicles; settings = d.settings; nextId = d.nextId; onboarded = false;
   save();
 }
-function save(){
-  try{ localStorage.setItem(STORE_KEY, JSON.stringify({vehicles, settings, nextId, onboarded})); }
+function persist(){
+  try{ localStorage.setItem(STORE_KEY, JSON.stringify({vehicles, settings, nextId, onboarded, dataUpdatedAt, sync})); }
   catch(e){ console.warn('Sauvegarde impossible', e); }
+}
+function save(){
+  dataUpdatedAt = Date.now();
+  persist();
+  schedulePush();
 }
 function doReset(){
   const d = defaultData();
@@ -706,7 +715,7 @@ function sidebarHtml(){
     const attr = it.filled ? (active?`fill="${col}"`:`fill="none" stroke="${col}" stroke-width="1.4"`) : `stroke="${col}" stroke-width="1.4" fill="none" stroke-linejoin="round" stroke-linecap="round"`;
     return `<button class="side-item ${active?'active':''}" onclick="switchTab('${it.id}')"><svg width="19" height="19" viewBox="0 0 18 19" ${attr}>${it.svg}</svg><span>${it.label}</span></button>`;
   }).join('');
-  return `<aside class="sidebar"><div class="side-logo"><span>PITSTOP</span> <span style="color:var(--accent);">MANAGER</span></div><nav class="side-nav">${links}</nav><div class="side-foot">v1.3 · données locales</div></aside>`;
+  return `<aside class="sidebar"><div class="side-logo"><span>PITSTOP</span> <span style="color:var(--accent);">MANAGER</span></div><nav class="side-nav">${links}</nav><div class="side-foot">v1.4 · données locales</div></aside>`;
 }
 function headerMeta(t){
   if(t==='home'){ const greet = settings.name ? `Bonjour ${settings.name}` : 'Ton parc'; return {title:greet, sub:'Vue d\'ensemble de ton parc'}; }
@@ -1103,7 +1112,19 @@ function viewProfil(){
     <button class="btn btn-secondary" style="margin-top:12px;" onclick="openModal('export')"><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 2v8M5 7l3 3 3-3M3 12.5h10" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>Exporter mes données</button>
     <button class="btn btn-secondary" style="margin-top:10px;" onclick="openModal('import')"><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 10V2M5 5l3-3 3 3M3 12.5h10" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>Importer mes données</button>
     <button class="btn btn-danger" style="margin-top:10px;" onclick="resetData()">${trashSvg}Réinitialiser toutes les données</button>
-    <div style="text-align:center;margin-top:24px;"><div style="font-family:var(--f-display);font-size:18px;font-weight:800;letter-spacing:0.04em;color:var(--t3);">PITSTOP <span style="color:var(--accent);">MANAGER</span></div><div style="font-family:var(--f-data);font-size:10px;color:var(--t3);letter-spacing:0.12em;margin-top:3px;">v1.3</div></div>
+
+    <div class="sec-title" style="margin-top:24px;">Synchronisation</div>
+    <div style="font-size:11px;color:var(--t3);line-height:1.5;margin-bottom:12px;">Sauvegarde automatique dans un dépôt GitHub <b>privé</b>, pour retrouver tes données sur tes autres appareils. L'app reste utilisable hors-ligne ; l'envoi se fait dès qu'une connexion est disponible.</div>
+    <div class="field"><label class="field-label">Dépôt (utilisateur/nom)</label><input id="sync-repo" placeholder="Lookman0809/pitstop-data" value="${escapeHtml(sync.repo||'')}" onchange="saveSyncField('repo',this.value)"></div>
+    <div class="field"><label class="field-label">Token d'accès <span style="color:var(--t3);">(fine-grained, Contents: read & write)</span></label><input id="sync-token" type="password" placeholder="github_pat_…" value="${escapeHtml(sync.token||'')}" onchange="saveSyncField('token',this.value)"></div>
+    <div style="font-size:12px;color:var(--t2);margin:2px 0 12px;">État : <span id="sync-status">${syncStatusHtml()}</span></div>
+    ${sync.enabled
+      ? `<button class="btn btn-secondary" onclick="syncNow()"><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9M13.5 2v3h-3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>Synchroniser maintenant</button>
+         <button class="btn btn-secondary" style="margin-top:10px;" onclick="disableSync()">Désactiver la synchronisation</button>`
+      : `<button class="btn btn-primary" onclick="activateSync()">Activer la synchronisation</button>`}
+    <div style="font-size:10.5px;color:var(--t3);line-height:1.5;margin-top:10px;">Le token est stocké uniquement sur cet appareil et n'est jamais inclus dans les exports. Crée-le sur GitHub → Settings → Developer settings → Fine-grained tokens, limité à ce seul dépôt.</div>
+
+    <div style="text-align:center;margin-top:24px;"><div style="font-family:var(--f-display);font-size:18px;font-weight:800;letter-spacing:0.04em;color:var(--t3);">PITSTOP <span style="color:var(--accent);">MANAGER</span></div><div style="font-family:var(--f-data);font-size:10px;color:var(--t3);letter-spacing:0.12em;margin-top:3px;">v1.4</div></div>
   </div>`;
 }
 
@@ -1136,6 +1157,7 @@ function renderModal(){
     case 'import':          inner = modalImport(); break;
     case 'logUsage':        inner = modalLogUsage(); break;
     case 'saleListing':     inner = modalSaleListing(); break;
+    case 'choice':          inner = modalChoice(); break;
   }
   m.innerHTML = `<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal"><div class="modal-handle"></div>${inner}</div></div>`;
 }
@@ -1350,7 +1372,7 @@ function openModal(name, ctx){
   if(name==='editDeadline'){ const v=byId(ctx.vehicleId); const d=v.deadlines.find(x=>x.id===ctx.deadlineId); state.draft.recurrence=d.recurrence||'none'; }
   renderModal();
 }
-function closeModal(){ state.modal=null; state.ctx={}; state.draft={}; _confirmCb=null; renderModal(); }
+function closeModal(){ state.modal=null; state.ctx={}; state.draft={}; _confirmCb=null; _choiceA=null; _choiceB=null; renderModal(); }
 function pickChip(group, value, el){
   state.draft[group]=value;
   const parent = el.parentElement; [...parent.children].forEach(c=>c.classList.remove('active')); el.classList.add('active');
@@ -1365,6 +1387,18 @@ function confirmDialog(title, message, confirmLabel, onYes, danger){
   state.modal='confirm'; state.ctx={title, message, confirmLabel:confirmLabel||'Confirmer', danger: danger!==false}; _confirmCb=onYes; renderModal();
 }
 function runConfirm(){ const cb=_confirmCb; _confirmCb=null; state.modal=null; state.ctx={}; renderModal(); if(cb) cb(); }
+let _choiceA = null, _choiceB = null;
+function choiceDialog(title, message, labelA, cbA, labelB, cbB){
+  state.modal='choice'; state.ctx={title, message, labelA, labelB}; _choiceA=cbA; _choiceB=cbB; renderModal();
+}
+function modalChoice(){
+  const c = state.ctx;
+  return `<div class="modal-title">${c.title}</div><div class="modal-desc">${c.message}</div>
+    <button class="btn btn-primary" onclick="runChoice('a')">${c.labelA}</button>
+    <button class="btn btn-secondary" style="margin-top:10px;" onclick="runChoice('b')">${c.labelB}</button>
+    <div style="text-align:center;margin-top:12px;"><span class="sec-link" onclick="closeModal()">Annuler</span></div>`;
+}
+function runChoice(which){ const cb = which==='a'?_choiceA:_choiceB; _choiceA=null; _choiceB=null; state.modal=null; state.ctx={}; renderModal(); if(cb) cb(); }
 
 function val(id){ const e=document.getElementById(id); return e?e.value.trim():''; }
 function num(id){ return parseInt(val(id).replace(/\s/g,'').replace(',','.'),10)||0; }
@@ -1649,10 +1683,171 @@ function importFromFile(ev){
   reader.readAsText(file);
 }
 
+
+/* ════════════ SYNCHRONISATION (dépôt GitHub privé) ════════════ */
+let _pushTimer = null;
+let _syncing = false;
+let _pendingPush = false;
+
+function syncConfigured(){ return !!(sync.repo && sync.token); }
+function syncReady(){ return sync.enabled && syncConfigured(); }
+function syncDataBlob(){ return { app:'PitStop Manager', version:3, dataUpdatedAt, exportedAt:new Date().toISOString(), settings, nextId, onboarded, vehicles }; }
+
+function strToB64(str){ const bytes=new TextEncoder().encode(str); let bin=''; bytes.forEach(b=>bin+=String.fromCharCode(b)); return btoa(bin); }
+function b64ToStr(b64){ const bin=atob(String(b64).replace(/\s/g,'')); const bytes=Uint8Array.from(bin, c=>c.charCodeAt(0)); return new TextDecoder().decode(bytes); }
+
+function ghApiUrl(){
+  const repo = sync.repo.trim().replace(/^https?:\/\/github\.com\//,'').replace(/\.git$/,'').replace(/\/+$/,'');
+  return `https://api.github.com/repos/${repo}/contents/backup.json`;
+}
+function ghHeaders(){ return { 'Authorization':'Bearer '+sync.token.trim(), 'Accept':'application/vnd.github+json', 'X-GitHub-Api-Version':'2022-11-28' }; }
+
+/* Récupère le fichier distant : {found, sha, blob} ou lève une erreur */
+async function ghFetchRemote(){
+  const res = await fetch(ghApiUrl()+'?ref=HEAD&t='+Date.now(), { headers: ghHeaders(), cache:'no-store' });
+  if(res.status===404) return { found:false, sha:null, blob:null };
+  if(res.status===401) throw new Error('Token refusé (401). Vérifie le token.');
+  if(res.status===403) throw new Error('Accès interdit (403). Droits du token ?');
+  if(!res.ok) throw new Error('Erreur GitHub ('+res.status+').');
+  const j = await res.json();
+  let blob=null; try{ blob = JSON.parse(b64ToStr(j.content)); }catch(e){ blob=null; }
+  return { found:true, sha:j.sha, blob };
+}
+/* Écrit le fichier distant avec le sha courant (création si absent) */
+async function ghPutRemote(sha){
+  const body = { message:'PitStop sync '+new Date().toISOString(), content: strToB64(JSON.stringify(syncDataBlob(), null, 2)) };
+  if(sha) body.sha = sha;
+  const res = await fetch(ghApiUrl(), { method:'PUT', headers: Object.assign({'Content-Type':'application/json'}, ghHeaders()), body: JSON.stringify(body) });
+  if(res.status===409) throw new Error('conflict');
+  if(!res.ok) throw new Error('Envoi refusé ('+res.status+').');
+  return true;
+}
+
+/* Pousse les données locales vers le dépôt (last-write-wins) */
+async function syncPush(silent){
+  if(!syncReady() || _syncing) { if(!syncReady()) return; _pendingPush=true; return; }
+  if(typeof navigator!=='undefined' && navigator.onLine===false){ _pendingPush=true; return; }
+  _syncing = true;
+  try{
+    let remote = await ghFetchRemote();
+    await ghPutRemote(remote.sha);
+    sync.lastSync = Date.now(); sync.lastError=''; _pendingPush=false; persist();
+    if(!silent) toast('Sauvegarde en ligne à jour');
+    renderSyncStatus();
+  }catch(e){
+    if(e.message==='conflict'){ try{ const r=await ghFetchRemote(); await ghPutRemote(r.sha); sync.lastSync=Date.now(); sync.lastError=''; _pendingPush=false; persist(); renderSyncStatus(); }catch(e2){ sync.lastError=e2.message; _pendingPush=true; persist(); renderSyncStatus(); } }
+    else { sync.lastError = e.message; _pendingPush=true; persist(); if(!silent) toast('Synchro impossible : '+e.message); renderSyncStatus(); }
+  }finally{ _syncing=false; flushPending(); }
+}
+
+/* Récupère la version en ligne et l'applique si elle est plus récente */
+async function syncPull(silent){
+  if(!syncReady() || _syncing) return;
+  if(typeof navigator!=='undefined' && navigator.onLine===false) return;
+  _syncing = true;
+  try{
+    const remote = await ghFetchRemote();
+    if(remote.found && remote.blob && Array.isArray(remote.blob.vehicles)){
+      const remoteAt = remote.blob.dataUpdatedAt || 0;
+      if(remoteAt > dataUpdatedAt){
+        applyRemoteBlob(remote.blob);
+        sync.lastSync = Date.now(); sync.lastError=''; persist();
+        render();
+        if(!silent) toast('Données récupérées depuis le cloud');
+      } else {
+        sync.lastSync = Date.now(); sync.lastError=''; persist(); renderSyncStatus();
+        if(!silent) toast('Déjà à jour');
+        if(dataUpdatedAt > remoteAt) _pendingPush=true;
+      }
+    } else if(!remote.found){
+      if(!silent) toast('Aucune sauvegarde en ligne — envoi des données locales');
+      _pendingPush=true;
+    }
+  }catch(e){ sync.lastError=e.message; persist(); if(!silent) toast('Récupération impossible : '+e.message); renderSyncStatus(); }
+  finally{ _syncing=false; flushPending(); }
+}
+
+/* Renvoie un push en attente une fois le verrou libéré et la connexion dispo */
+function flushPending(){
+  if(_pendingPush && syncReady() && !_syncing && !(typeof navigator!=='undefined' && navigator.onLine===false)){
+    setTimeout(()=>syncPush(true), 60);
+  }
+}
+
+function applyRemoteBlob(blob){
+  vehicles = blob.vehicles || [];
+  settings = Object.assign({name:'',warnKm:1500,warnHours:10,warnDays:30,warnConsPct:25}, blob.settings||{});
+  nextId = blob.nextId || 600;
+  if(typeof blob.onboarded==='boolean') onboarded = blob.onboarded;
+  dataUpdatedAt = blob.dataUpdatedAt || Date.now();
+  migrate();
+  let maxId=0; vehicles.forEach(v=>{ maxId=Math.max(maxId, v.id||0); ['recos','history','deadlines','fuelLogs','usageLog'].forEach(k=>(v[k]||[]).forEach(x=>maxId=Math.max(maxId, x.id||0))); });
+  if(nextId<=maxId) nextId=maxId+1;
+  persist();
+}
+
+/* Envoi auto, temporisé, après chaque modification */
+function schedulePush(){
+  if(!syncReady()) return;
+  if(_pushTimer) clearTimeout(_pushTimer);
+  _pushTimer = setTimeout(()=>{ _pushTimer=null; syncPush(true); }, 1800);
+}
+
+/* À l'ouverture : récupère la version en ligne si plus récente */
+function syncOnStartup(){ if(syncReady()) setTimeout(()=>syncPull(true), 300); }
+
+/* Reprise quand la connexion revient */
+if(typeof window!=='undefined'){
+  window.addEventListener('online', ()=>{ if(syncReady() && _pendingPush) syncPush(true); });
+}
+
+/* ─ Réglages : actions de synchro ─ */
+function renderSyncStatus(){
+  const el = document.getElementById('sync-status'); if(!el) return;
+  el.innerHTML = syncStatusHtml();
+}
+function syncStatusHtml(){
+  if(!syncConfigured()) return `<span style="color:var(--t3);">Non configurée</span>`;
+  const when = sync.lastSync ? fmtDateTime(sync.lastSync) : 'jamais';
+  if(sync.lastError) return `<span style="color:var(--danger);">Erreur : ${escapeHtml(sync.lastError)}</span><br><span style="color:var(--t3);">Dernière synchro : ${when}</span>`;
+  const state_ = sync.enabled ? '<span style="color:var(--ok);">Activée</span>' : '<span style="color:var(--t3);">En pause</span>';
+  return `${state_} · dernière synchro : ${when}`;
+}
+function fmtDateTime(ms){ const d=new Date(ms); return d.toLocaleDateString('fr-FR')+' '+d.toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'}); }
+
+function saveSyncField(k, v){ sync[k]=v.trim(); persist(); }
+async function activateSync(){
+  sync.repo = val('sync-repo').trim(); sync.token = val('sync-token').trim();
+  if(!sync.repo || !sync.token){ toast('Renseigne le dépôt et le token.'); return; }
+  sync.lastError=''; persist(); toast('Connexion en cours…');
+  try{
+    const remote = await ghFetchRemote();
+    if(remote.found && remote.blob && Array.isArray(remote.blob.vehicles) && remote.blob.vehicles.length){
+      const here = vehicles.length;
+      choiceDialog('Sauvegarde en ligne trouvée',
+        `Le dépôt contient déjà ${remote.blob.vehicles.length} véhicule(s). Cet appareil en a ${here}. Que veux-tu utiliser ?`,
+        'Récupérer le cloud (écrase l\'appareil)',
+        ()=>{ applyRemoteBlob(remote.blob); sync.enabled=true; sync.lastSync=Date.now(); persist(); render(); toast('Synchronisation activée (données du cloud)'); },
+        'Garder l\'appareil (écrase le cloud)',
+        ()=>{ sync.enabled=true; persist(); syncPush(false); render(); toast('Synchronisation activée (données de l\'appareil)'); }
+      );
+    } else {
+      sync.enabled=true; persist(); await syncPush(false); render(); toast('Synchronisation activée');
+    }
+  }catch(e){ sync.lastError=e.message; persist(); toast('Échec : '+e.message); renderSyncStatus(); }
+}
+function disableSync(){
+  confirmDialog('Désactiver la synchronisation', 'Tes données restent sur l\'appareil et dans le dépôt, mais ne seront plus synchronisées automatiquement.', 'Désactiver', ()=>{
+    sync.enabled=false; persist(); render(); toast('Synchronisation désactivée');
+  });
+}
+function syncNow(){ if(!syncConfigured()){ toast('Configure d\'abord la synchro.'); return; } toast('Synchronisation…'); syncPull(false); }
+
 window.addEventListener('resize', onResize);
 if('serviceWorker' in navigator){ window.addEventListener('load', ()=>{ navigator.serviceWorker.register('sw.js').catch(()=>{}); }); }
 load();
 render();
+syncOnStartup();
 </script>
 </body>
 </html>
