@@ -94,6 +94,11 @@
   .garage-search{width:100%;background:var(--bg-2);border:1px solid var(--b2);border-radius:var(--r-md);padding:11px 13px;color:var(--t1);font-family:var(--f-body);font-size:13px;outline:none;}
   .garage-search:focus{border-color:var(--accent);}
   .garage-search::placeholder{color:var(--t3);}
+  .cmp-table{margin-top:14px;border:1px solid var(--b1);border-radius:var(--r-md);overflow:hidden;}
+  .cmp-row{display:grid;grid-template-columns:1fr auto 1fr;gap:8px;align-items:center;padding:10px 12px;border-bottom:1px solid var(--b1);}
+  .cmp-row:last-child{border-bottom:none;}
+  .cmp-l,.cmp-r{font-family:var(--f-data);font-size:12.5px;color:var(--t1);text-align:center;}
+  .cmp-m{font-size:10.5px;color:var(--t3);text-align:center;text-transform:uppercase;letter-spacing:0.04em;}
   .veh-right{display:flex;flex-direction:column;align-items:flex-end;gap:9px;}
   .veh-plate{background:var(--accent-dim);border:1px solid rgba(240,82,26,0.18);border-radius:6px;padding:3px 8px;font-family:var(--f-data);font-size:10px;color:var(--accent);font-weight:500;white-space:nowrap;}
   .veh-cat{background:var(--bg-4);border:1px solid var(--b1);border-radius:6px;padding:3px 8px;font-size:10px;color:var(--t2);font-weight:500;white-space:nowrap;}
@@ -254,6 +259,13 @@ const CAT = { voiture:'Voiture', moto:'Moto', cyclomoteur:'Cyclomoteur', autre:'
 const CATMAP = { voiture:'voiture', moto:'moto', motocross:'moto', cyclomoteur:'cyclomoteur', quad:'autre', kart:'autre', autre:'autre' };
 const catLabel = v => CAT[v.category] || 'Autre';
 
+/* ════════════ VÉRIFICATIONS (niveaux, pression…) ════════════ */
+const CHECK_TYPES = [['oil','Huile moteur'],['coolant','Liquide de refroidissement'],['brake','Liquide de frein'],['washer','Lave-glace'],['tire','Pression pneus'],['other','Autre']];
+const CHECK_LABEL = Object.fromEntries(CHECK_TYPES);
+const CHECK_LEVELS = [['bas','Bas'],['correct','Correct'],['plein','Plein']];
+const CHECK_LEVEL_LABEL = Object.fromEntries(CHECK_LEVELS);
+const CHECK_LEVEL_COLOR = { bas:'danger', correct:'ok', plein:'ok' };
+
 /* ════════════ DEFAULT DATA ════════════ */
 function defaultData(){
   return {
@@ -278,6 +290,8 @@ function migrate(){
     v.recos = v.recos || []; v.history = v.history || []; v.deadlines = v.deadlines || []; v.fuelLogs = v.fuelLogs || [];
     v.tags = v.tags || [];
     v.usageLog = v.usageLog || [];
+    v.notes = v.notes || [];
+    v.checks = v.checks || [];
     if(!v.usageLog.length) v.usageLog.push({id:++nextId, date:todayISO(), value:v.usage||0});
     v.recos.forEach(r=>{ if(r.intervalMonths===undefined) r.intervalMonths=null; if(r.interval===undefined) r.interval=null; });
     v.history.forEach(h=>{ if(h.cost==null) h.cost=0; });
@@ -430,6 +444,18 @@ function maintSpend(v){ return v.history.reduce((s,h)=>s+(h.cost||0),0); }
 function totalSpend(v){ return fuelSpend(v)+maintSpend(v); }
 function distanceLogged(v){ return v.fuelLogs.reduce((s,f)=>s+f.distance,0); }
 function costPerUnit(v){ const d=distanceLogged(v); return d>0 ? totalSpend(v)/d : null; }
+function vehicleCompareStats(v){
+  const cpu = costPerUnit(v);
+  const cons = avgCons(v);
+  const sold = v.status==='sold';
+  return {
+    total: totalSpend(v),
+    cpuLabel: cpu!=null ? `${cpu.toFixed(v.unit==='h'?1:2)} €/${unitL(v)}` : 'coût/unité inconnu',
+    consLabel: cons!=null ? `${cons.toFixed(1)} ${consUnit(v)}` : 'conso inconnue',
+    valueLabel: sold ? fmtPrice(v.salePrice||0) : fmtPrice(v.estValue||0),
+    valueSub: sold ? 'prix de vente' : 'valeur estimée',
+  };
+}
 function logUsage(v, value, date){
   v.usageLog = v.usageLog || [];
   const ex = v.usageLog.find(e=>e.date===date);
@@ -504,6 +530,7 @@ const ICONS = {
   date:'<rect x="4" y="5.5" width="12" height="11" rx="2" stroke="CC" stroke-width="1.3" fill="none"/><path d="M7 3.5v4M13 3.5v4" stroke="CC" stroke-width="1.3" stroke-linecap="round"/>',
   fuel:'<path d="M5 16V5a1 1 0 0 1 1-1h5a1 1 0 0 1 1 1v11M4 16h9M12 8h2.5a1 1 0 0 1 1 1v4a1.5 1.5 0 0 0 3 0V7l-2-2" stroke="CC" stroke-width="1.3" fill="none" stroke-linecap="round" stroke-linejoin="round"/>',
   other:'<circle cx="10" cy="10" r="6.5" stroke="CC" stroke-width="1.3" fill="none"/><path d="M10 7v3l2 2" stroke="CC" stroke-width="1.3" stroke-linecap="round"/>',
+  drop:'<path d="M10 3.5c2.8 3.6 4.5 6.1 4.5 8.3a4.5 4.5 0 1 1-9 0c0-2.2 1.7-4.7 4.5-8.3z" stroke="CC" stroke-width="1.3" fill="none" stroke-linejoin="round"/>',
 };
 function icon(t,c){ return `<svg width="18" height="18" viewBox="0 0 20 20" fill="none">${(ICONS[t]||ICONS.other).replaceAll('CC',c)}</svg>`; }
 const SC = {ok:'var(--ok)', warn:'var(--warn)', danger:'var(--danger)', info:'var(--info)'};
@@ -533,39 +560,106 @@ function donutSVG(map){
 }
 function consChartSVG(v){
   const logs = [...v.fuelLogs].sort((a,b)=> new Date(a.date)-new Date(b.date));
-  const pts = logs.map(f=>({c:fillCons(f,v)})).filter(p=>p.c!=null);
-  if(pts.length<1) return `<div class="empty">Pas assez de données pour tracer un graphique.</div>`;
-  const W=300,H=130,pad=26,top=16,bot=H-22;
-  const vals = pts.map(p=>p.c); let min=Math.min(...vals), max=Math.max(...vals);
-  if(min===max){ min-=0.5; max+=0.5; }
+  const pts0 = logs.map(f=>({c:fillCons(f,v)})).filter(p=>p.c!=null);
+  if(pts0.length<1) return `<div class="empty">Pas assez de données pour tracer un graphique.</div>`;
+  const W=300,H=130,padX=10,top=16,bot=H-22;
+  const vals = pts0.map(p=>p.c); let min=Math.min(...vals), max=Math.max(...vals);
+  const span0=max-min; const pad = span0>0 ? span0*0.15 : Math.max(0.5,max*0.1);
+  min-=pad; max+=pad; if(min===max){ min-=0.5; max+=0.5; }
   const avg = vals.reduce((a,b)=>a+b,0)/vals.length;
-  const x = i => pts.length===1 ? W/2 : pad + i*(W-2*pad)/(pts.length-1);
+  const n = pts0.length;
+  const x = i => n===1 ? W/2 : padX + i*(W-2*padX)/(n-1);
   const y = val => bot - (val-min)/(max-min)*(bot-top);
-  const line = pts.map((p,i)=>`${x(i).toFixed(1)},${y(p.c).toFixed(1)}`).join(' ');
-  const dots = pts.map((p,i)=>`<circle cx="${x(i).toFixed(1)}" cy="${y(p.c).toFixed(1)}" r="3" fill="#F0521A"/>`).join('');
+  const pts = pts0.map((p,i)=>({x:x(i), y:y(p.c)}));
+  const smoothPath = (p)=>{
+    if(p.length<2) return '';
+    if(p.length===2) return `M ${p[0].x.toFixed(1)},${p[0].y.toFixed(1)} L ${p[1].x.toFixed(1)},${p[1].y.toFixed(1)}`;
+    let d = `M ${p[0].x.toFixed(1)},${p[0].y.toFixed(1)} `;
+    for(let i=0;i<p.length-1;i++){
+      const p0=p[i-1]||p[i], p1=p[i], p2=p[i+1], p3=p[i+2]||p2;
+      const c1x=p1.x+(p2.x-p0.x)/6, c1y=p1.y+(p2.y-p0.y)/6;
+      const c2x=p2.x-(p3.x-p1.x)/6, c2y=p2.y-(p3.y-p1.y)/6;
+      d += `C ${c1x.toFixed(1)},${c1y.toFixed(1)} ${c2x.toFixed(1)},${c2y.toFixed(1)} ${p2.x.toFixed(1)},${p2.y.toFixed(1)} `;
+    }
+    return d;
+  };
+  const path = smoothPath(pts);
+  const areaPath = n>1 ? `${path} L ${pts[n-1].x.toFixed(1)},${bot} L ${pts[0].x.toFixed(1)},${bot} Z` : '';
+  const dots = pts.map((p,i)=>`<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="${i===n-1?3.6:2.4}" fill="#F0521A"${i===n-1?' stroke="#09090C" stroke-width="1.5"':''}/>`).join('');
   const ay = y(avg).toFixed(1);
-  return `<svg width="100%" height="${H}" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" style="display:block;">
-    <line x1="${pad}" y1="${ay}" x2="${W-pad}" y2="${ay}" stroke="#596070" stroke-width="1" stroke-dasharray="3 3"/>
-    <text x="${W-pad}" y="${(ay-5)}" text-anchor="end" font-family="JetBrains Mono,monospace" font-size="9" fill="#596070">moy ${avg.toFixed(1)}</text>
-    ${pts.length>1?`<polyline points="${line}" fill="none" stroke="#F0521A" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`:''}
+  const uid = 'cc'+Math.random().toString(36).slice(2,8);
+  return `<svg width="100%" height="${H}" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" style="display:block;overflow:visible;">
+    <defs><linearGradient id="${uid}" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#F0521A" stop-opacity="0.28"/><stop offset="100%" stop-color="#F0521A" stop-opacity="0"/>
+    </linearGradient></defs>
+    <line x1="${padX}" y1="${ay}" x2="${W-padX}" y2="${ay}" stroke="#596070" stroke-width="1" stroke-dasharray="3 3"/>
+    <text x="${W-padX}" y="${(ay-5)}" text-anchor="end" font-family="JetBrains Mono,monospace" font-size="9" fill="#596070">moy ${avg.toFixed(1)}</text>
+    ${n>1?`<path d="${areaPath}" fill="url(#${uid})" stroke="none"/>`:''}
+    ${n>1?`<path d="${path}" fill="none" stroke="#F0521A" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`:''}
     ${dots}
-    <text x="6" y="${top+3}" font-family="JetBrains Mono,monospace" font-size="9" fill="#596070">${max.toFixed(1)}</text>
-    <text x="6" y="${bot}" font-family="JetBrains Mono,monospace" font-size="9" fill="#596070">${min.toFixed(1)}</text>
+    <text x="6" y="${top-2}" font-family="JetBrains Mono,monospace" font-size="9" fill="#596070">${(max-pad).toFixed(1)}</text>
+    <text x="6" y="${bot+11}" font-family="JetBrains Mono,monospace" font-size="9" fill="#596070">${(min+pad).toFixed(1)}</text>
   </svg>`;
 }
-function sparkSVG(vals){
-  if(!vals.length) return '';
-  const W=300,H=110,pad=8,top=14,bot=H-16;
-  let min=Math.min(...vals), max=Math.max(...vals); if(min===max){ min-=1; max+=1; }
-  const x=i=> vals.length===1 ? W/2 : pad + i*(W-2*pad)/(vals.length-1);
+function sparkSVG(entries){
+  if(!entries.length) return '';
+  const vals = entries.map(e=>e.value);
+  const W=300,H=120,padX=10,top=16,bot=H-18;
+  let min=Math.min(...vals), max=Math.max(...vals);
+  const span0 = max-min; const pad = span0>0 ? span0*0.12 : Math.max(1,max*0.05);
+  min -= pad; max += pad; if(min===max){ min-=1; max+=1; }
+  const n = vals.length;
+  const x=i=> n===1 ? W/2 : padX + i*(W-2*padX)/(n-1);
   const y=val=> bot - (val-min)/(max-min)*(bot-top);
-  const line=vals.map((v,i)=>`${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(' ');
-  const dots=vals.map((v,i)=>`<circle cx="${x(i).toFixed(1)}" cy="${y(v).toFixed(1)}" r="2.6" fill="#F0521A"/>`).join('');
-  return `<svg width="100%" height="${H}" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" style="display:block;">
-    ${vals.length>1?`<polyline points="${line}" fill="none" stroke="#F0521A" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`:''}
+  const pts = vals.map((v,i)=>({x:x(i), y:y(v)}));
+
+  /* grille horizontale légère */
+  const gridY = [top, top+(bot-top)/2, bot];
+  const grid = gridY.map(gy=>`<line x1="${padX}" y1="${gy.toFixed(1)}" x2="${W-padX}" y2="${gy.toFixed(1)}" stroke="#20232B" stroke-width="1"/>`).join('');
+
+  /* courbe lissée (Catmull-Rom -> Bézier) */
+  const smoothPath = (p)=>{
+    if(p.length<2) return '';
+    if(p.length===2) return `M ${p[0].x.toFixed(1)},${p[0].y.toFixed(1)} L ${p[1].x.toFixed(1)},${p[1].y.toFixed(1)}`;
+    let d = `M ${p[0].x.toFixed(1)},${p[0].y.toFixed(1)} `;
+    for(let i=0;i<p.length-1;i++){
+      const p0 = p[i-1] || p[i], p1 = p[i], p2 = p[i+1], p3 = p[i+2] || p2;
+      const c1x = p1.x + (p2.x-p0.x)/6, c1y = p1.y + (p2.y-p0.y)/6;
+      const c2x = p2.x - (p3.x-p1.x)/6, c2y = p2.y - (p3.y-p1.y)/6;
+      d += `C ${c1x.toFixed(1)},${c1y.toFixed(1)} ${c2x.toFixed(1)},${c2y.toFixed(1)} ${p2.x.toFixed(1)},${p2.y.toFixed(1)} `;
+    }
+    return d;
+  };
+  const path = smoothPath(pts);
+  const areaPath = n>1 ? `${path} L ${pts[n-1].x.toFixed(1)},${bot} L ${pts[0].x.toFixed(1)},${bot} Z` : '';
+
+  /* segments en baisse (corrections) surlignés en pointillé rouge par-dessus */
+  let corrections = '';
+  for(let i=1;i<n;i++){ if(vals[i] < vals[i-1]){
+    corrections += `<line x1="${pts[i-1].x.toFixed(1)}" y1="${pts[i-1].y.toFixed(1)}" x2="${pts[i].x.toFixed(1)}" y2="${pts[i].y.toFixed(1)}" stroke="#EF4444" stroke-width="2" stroke-dasharray="4 3" stroke-linecap="round"/>`;
+  }}
+
+  const dots = pts.map((p,i)=>{
+    const isDrop = i>0 && vals[i]<vals[i-1];
+    const isLast = i===n-1;
+    const r = isLast ? 3.6 : 2.4;
+    const fill = isDrop ? '#EF4444' : (isLast ? '#F0521A' : '#F0521A');
+    return `<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="${r}" fill="${fill}"${isLast?' stroke="#09090C" stroke-width="1.5"':''}/>`;
+  }).join('');
+
+  const uid = 'sg'+Math.random().toString(36).slice(2,8);
+  return `<svg width="100%" height="${H}" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" style="display:block;overflow:visible;">
+    <defs><linearGradient id="${uid}" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#F0521A" stop-opacity="0.28"/>
+      <stop offset="100%" stop-color="#F0521A" stop-opacity="0"/>
+    </linearGradient></defs>
+    ${grid}
+    ${n>1?`<path d="${areaPath}" fill="url(#${uid})" stroke="none"/>`:''}
+    ${n>1?`<path d="${path}" fill="none" stroke="#F0521A" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`:''}
+    ${corrections}
     ${dots}
-    <text x="${W-4}" y="${top}" text-anchor="end" font-family="JetBrains Mono,monospace" font-size="9" fill="#596070">${fmt(max)}</text>
-    <text x="${W-4}" y="${bot}" text-anchor="end" font-family="JetBrains Mono,monospace" font-size="9" fill="#596070">${fmt(min)}</text>
+    <text x="${W-4}" y="${top-2}" text-anchor="end" font-family="JetBrains Mono,monospace" font-size="9" fill="#596070">${fmt(Math.round(max-pad))}</text>
+    <text x="${W-4}" y="${bot+11}" text-anchor="end" font-family="JetBrains Mono,monospace" font-size="9" fill="#596070">${fmt(Math.round(min+pad))}</text>
   </svg>`;
 }
 function usageSection(v){
@@ -580,7 +674,10 @@ function usageSection(v){
   let html=`<div class="stat" style="padding:16px;margin-bottom:8px;display:flex;justify-content:space-between;align-items:flex-end;">
     <div><div class="stat-label" style="margin:0 0 4px;">Compteur actuel</div><div class="stat-val">${fmt(v.usage)}<span class="unit">${u}</span></div></div>
     <div style="text-align:right;"><div class="stat-label" style="margin:0 0 4px;">Rythme estimé</div><div style="font-family:var(--f-data);font-size:14px;color:var(--t1);">${rythme}</div></div></div>`;
-  if(log.length>=2) html += `<div style="background:var(--bg-2);border:1px solid var(--b1);border-radius:var(--r-md);padding:12px 8px 4px;">${sparkSVG(log.map(e=>e.value))}</div>`;
+  if(log.length>=2){
+    html += `<div style="background:var(--bg-2);border:1px solid var(--b1);border-radius:var(--r-md);padding:12px 8px 4px;">${sparkSVG(log)}</div>`;
+    html += `<div style="text-align:right;margin-top:8px;"><span class="sec-link" onclick="openModal('usageAll',{vehicleId:${v.id}})">Voir l'historique (${log.length}) →</span></div>`;
+  }
   return html;
 }
 function tcoSection(v){
@@ -597,6 +694,35 @@ function tcoSection(v){
     <div class="detail-cell"><div class="detail-cell-l">Coût / ${u}</div><div class="detail-cell-v">${perKm!=null?perKm.toFixed(v.unit==='h'?1:2)+' €':'—'}</div></div>
     <div class="detail-cell"><div class="detail-cell-l">Distance suivie</div><div class="detail-cell-v">${fmt(dist)} ${u}</div></div>
   </div>`;
+}
+const CHECK_ICON = { oil:'oil', coolant:'drop', brake:'brake', washer:'drop', tire:'tire', other:'other' };
+function latestCheckOf(v, type){
+  const list = (v.checks||[]).filter(c=>c.type===type);
+  if(!list.length) return null;
+  return [...list].sort((a,b)=> new Date(b.date)-new Date(a.date))[0];
+}
+function checksSection(v){
+  const rows = CHECK_TYPES.map(([type,label])=>{
+    const c = latestCheckOf(v, type);
+    const color = c ? (SC[CHECK_LEVEL_COLOR[c.level]]||SC.ok) : 'var(--t3)';
+    const bg = c ? (SD[CHECK_LEVEL_COLOR[c.level]]||SD.ok) : 'var(--bg-4)';
+    const sub = c ? `${CHECK_LEVEL_LABEL[c.level]}${c.topped?' · appoint fait':''} · il y a ${daysAgo(c.date)} j` : 'Jamais vérifié';
+    return `<div class="row tap" onclick="openModal('checksAll',{vehicleId:${v.id},checkType:'${type}'})">
+      <div class="row-icon" style="background:${bg};">${icon(CHECK_ICON[type]||'other', color)}</div>
+      <div class="row-body"><div class="row-name">${label}</div><div class="row-sub">${sub}</div></div>
+      ${c?`<span class="badge ${CHECK_LEVEL_COLOR[c.level]}"><span class="dot"></span>${CHECK_LEVEL_LABEL[c.level]}</span>`:''}
+    </div>`;
+  }).join('');
+  return rows;
+}
+function notesSection(v){
+  const list = [...(v.notes||[])].sort((a,b)=> new Date(b.date)-new Date(a.date));
+  if(!list.length) return `<div class="empty">Aucune note. Ajoute un rappel libre (bruit inhabituel, à surveiller…).</div>`;
+  return list.map(n=>`<div class="row">
+    <div class="row-icon" style="background:var(--bg-4);">${icon('other','var(--t2)')}</div>
+    <div class="row-body"><div class="row-name">${escapeHtml(n.text)}</div><div class="row-sub">${fmtDate(n.date)}</div></div>
+    <button class="icon-del" onclick="deleteNote(${v.id},${n.id})" aria-label="Supprimer">${trashSvg}</button>
+  </div>`).join('');
 }
 function fuelRow(v, f, sortedDesc, i){
   const c = fillCons(f,v); const prev = sortedDesc[i+1] ? fillCons(sortedDesc[i+1],v) : null;
@@ -715,7 +841,7 @@ function sidebarHtml(){
     const attr = it.filled ? (active?`fill="${col}"`:`fill="none" stroke="${col}" stroke-width="1.4"`) : `stroke="${col}" stroke-width="1.4" fill="none" stroke-linejoin="round" stroke-linecap="round"`;
     return `<button class="side-item ${active?'active':''}" onclick="switchTab('${it.id}')"><svg width="19" height="19" viewBox="0 0 18 19" ${attr}>${it.svg}</svg><span>${it.label}</span></button>`;
   }).join('');
-  return `<aside class="sidebar"><div class="side-logo"><span>PITSTOP</span> <span style="color:var(--accent);">MANAGER</span></div><nav class="side-nav">${links}</nav><div class="side-foot">v1.4.2 · données locales</div></aside>`;
+  return `<aside class="sidebar"><div class="side-logo"><span>PITSTOP</span> <span style="color:var(--accent);">MANAGER</span></div><nav class="side-nav">${links}</nav><div class="side-foot">v1.5 · données locales</div></aside>`;
 }
 function headerMeta(t){
   if(t==='home'){ const greet = settings.name ? `Bonjour ${settings.name}` : 'Ton parc'; return {title:greet, sub:'Vue d\'ensemble de ton parc'}; }
@@ -944,6 +1070,11 @@ function viewDetail(id){
   html += usageSection(v);
   html += addBtn('Relever le compteur', `openModal('logUsage',{vehicleId:${v.id}})`);
 
+  /* vérifications (niveaux, pression) */
+  html += `<div class="sec-title">Vérifications</div>`;
+  html += checksSection(v);
+  html += addBtn('Faire une vérification', `openModal('addCheck',{vehicleId:${v.id}})`);
+
   /* coût de possession */
   html += `<div class="sec-title">Coût de possession</div>`;
   html += tcoSection(v);
@@ -983,6 +1114,11 @@ function viewDetail(id){
     }).join('');
   } else { html += `<div class="empty">Aucune échéance enregistrée.</div>`; }
   html += addBtn('Ajouter une échéance', `openModal('addDeadline',{vehicleId:${v.id}})`);
+
+  /* notes libres */
+  html += `<div class="sec-title">Notes</div>`;
+  html += notesSection(v);
+  html += addBtn('Ajouter une note', `openModal('addNote',{vehicleId:${v.id}})`);
 
   /* actions véhicule */
   html += `<div style="margin-top:24px;">`;
@@ -1078,6 +1214,21 @@ function viewFinance(){
       <div class="detail-cell"><div class="detail-cell-l">Plus / moins-value</div><div class="detail-cell-v" style="color:${diff>=0?'var(--ok)':'var(--danger)'};">${diff>=0?'+':'−'}${fmtPrice(Math.abs(diff))}</div></div>
       <div class="detail-cell"><div class="detail-cell-l">Dépense moy. / véhicule</div><div class="detail-cell-v">${fmtPrice(avgPerVeh)}</div></div>
     </div>`;
+
+  html += `<div class="sec-title">Comparatif du parc <span style="color:var(--t3);font-weight:500;">(véhicules vendus inclus)</span></div>`;
+  if(all.length){
+    html += all.map(v=>{
+      const cs = vehicleCompareStats(v);
+      const statusBadge = v.status==='sold' ? `<span class="badge sold">Vendu</span>` : v.status==='for_sale' ? `<span class="badge sale"><span class="dot"></span>En vente</span>` : '';
+      const detail = `${cs.cpuLabel} · ${cs.consLabel}`;
+      return `<div class="row tap" onclick="openVehicle(${v.id})">
+        <div class="row-icon" style="background:var(--bg-4);">${icon('tire','var(--t2)')}</div>
+        <div class="row-body"><div class="row-name">${vehTitle(v)} ${statusBadge}</div><div class="row-sub">${detail}</div></div>
+        <div style="text-align:right;"><div style="font-family:var(--f-data);font-size:13px;color:var(--t1);">${cs.valueLabel}</div><div style="font-size:10px;color:var(--t3);margin-top:2px;">${cs.valueSub}</div></div>
+      </div>`;
+    }).join('');
+  } else { html += `<div class="empty">Aucun véhicule dans le parc.</div>`; }
+  html += `<button class="btn btn-secondary" style="margin-top:12px;" onclick="openModal('compareVehicles')">Comparer deux véhicules</button>`;
   return html;
 }
 
@@ -1124,7 +1275,7 @@ function viewProfil(){
       : `<button class="btn btn-primary" onclick="activateSync()">Activer la synchronisation</button>`}
     <div style="font-size:10.5px;color:var(--t3);line-height:1.5;margin-top:10px;">Le token est stocké uniquement sur cet appareil et n'est jamais inclus dans les exports. Crée-le sur GitHub → Settings → Developer settings → Fine-grained tokens, limité à ce seul dépôt.</div>
 
-    <div style="text-align:center;margin-top:24px;"><div style="font-family:var(--f-display);font-size:18px;font-weight:800;letter-spacing:0.04em;color:var(--t3);">PITSTOP <span style="color:var(--accent);">MANAGER</span></div><div style="font-family:var(--f-data);font-size:10px;color:var(--t3);letter-spacing:0.12em;margin-top:3px;">v1.4.2</div></div>
+    <div style="text-align:center;margin-top:24px;"><div style="font-family:var(--f-display);font-size:18px;font-weight:800;letter-spacing:0.04em;color:var(--t3);">PITSTOP <span style="color:var(--accent);">MANAGER</span></div><div style="font-family:var(--f-data);font-size:10px;color:var(--t3);letter-spacing:0.12em;margin-top:3px;">v1.5</div></div>
   </div>`;
 }
 
@@ -1156,8 +1307,13 @@ function renderModal(){
     case 'export':          inner = modalExport(); break;
     case 'import':          inner = modalImport(); break;
     case 'logUsage':        inner = modalLogUsage(); break;
+    case 'usageAll':        inner = modalUsageAll(); break;
     case 'saleListing':     inner = modalSaleListing(); break;
     case 'choice':          inner = modalChoice(); break;
+    case 'addCheck':        inner = modalAddCheck(); break;
+    case 'checksAll':       inner = modalChecksAll(); break;
+    case 'addNote':         inner = modalAddNote(); break;
+    case 'compareVehicles': inner = modalCompareVehicles(); break;
   }
   m.innerHTML = `<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal"><div class="modal-handle"></div>${inner}</div></div>`;
 }
@@ -1279,9 +1435,14 @@ function modalFuel(edit){
   const v = byId(state.ctx.vehicleId); const u = unitL(v); const elec = isElectric(v); const eu = energyUnit(v);
   const f = edit ? v.fuelLogs.find(x=>x.id===state.ctx.fuelId) : null;
   const title = edit ? (elec?'MODIFIER LA RECHARGE':'MODIFIER LE PLEIN') : (elec?'NOUVELLE RECHARGE':'NOUVEAU PLEIN');
+  const distLabel = u==='h' ? 'Heures parcourues depuis le dernier plein' : 'Km parcourus depuis le dernier plein';
+  const last = latestReading(v);
+  const lastInfo = last ? `Dernier relevé : <b style="color:var(--t1);">${fmt(last.value)} ${u}</b> le ${fmtDate(last.date)} (il y a ${daysAgo(last.date)} j).` : '';
   return `<div class="modal-title">${title}</div><div class="modal-desc">${edit?'Corrige une saisie. Le compteur est ajusté en conséquence.':'Le compteur du véhicule sera mis à jour (+ distance saisie).'}</div>
+    ${lastInfo?`<div style="font-size:11.5px;color:var(--t3);margin:-4px 0 12px;line-height:1.5;">${lastInfo}</div>`:''}
     <div class="field-row"><div class="field"><label class="field-label">${elec?'kWh ajoutés':'Litres ajoutés'}</label><input id="f-liters" class="mono" inputmode="decimal" placeholder="${elec?'30':'48'}" value="${edit?f.liters:''}"></div>
-      <div class="field"><label class="field-label">${u==='h'?'Heures parcourues':'Km parcourus'}</label><input id="f-dist" class="mono" inputmode="numeric" placeholder="${u==='h'?'5':'600'}" value="${edit?f.distance:''}"></div></div>
+      <div class="field"><label class="field-label">${distLabel}</label><input id="f-dist" class="mono" inputmode="numeric" placeholder="${u==='h'?'5':'600'}" value="${edit?f.distance:''}"></div></div>
+    <div style="font-size:11px;color:var(--t3);margin:-6px 0 14px;">Ne mets pas la valeur totale du compteur (${fmt(v.usage)} ${u} actuellement) : uniquement la distance parcourue depuis le plein précédent.</div>
     <div class="field-row"><div class="field"><label class="field-label">Coût (€) <span style="color:var(--t3);">(opt.)</span></label><input id="f-fcost" class="mono" inputmode="decimal" placeholder="0" value="${edit&&f.cost?f.cost:''}"></div>
       <div class="field"><label class="field-label">Date</label><input id="f-fdate" type="date" class="mono" value="${edit?f.date:todayISO()}"></div></div>
     <div class="btn-row"><button class="btn btn-secondary" onclick="closeModal()">Annuler</button><button class="btn btn-primary" onclick="${edit?'saveEditFuel()':'saveFuel()'}">${edit?'Enregistrer':'Ajouter'}</button></div>`;
@@ -1331,6 +1492,25 @@ function modalFuelAll(){
     ${list.length?list.map((f,i)=>fuelRow(v,f,list,i)).join(''):`<div class="empty">Aucun plein.</div>`}
     <button class="btn btn-secondary" style="margin-top:16px;" onclick="closeModal()">Fermer</button>`;
 }
+function modalUsageAll(){
+  const v = byId(state.ctx.vehicleId); const u=unitL(v);
+  const log = [...(v.usageLog||[])].sort((a,b)=> new Date(b.date)-new Date(a.date));
+  const asc = [...log].reverse();
+  const rows = log.map((e,i)=>{
+    const idxAsc = asc.findIndex(x=>x.id===e.id);
+    const prev = asc[idxAsc-1];
+    const isDrop = prev && e.value < prev.value;
+    const delta = prev ? (e.value-prev.value) : null;
+    return `<div class="row">
+      <div class="row-icon" style="background:${isDrop?'var(--danger-dim)':'var(--bg-4)'};">${icon('gauge', isDrop?'var(--danger)':'var(--t2)')}</div>
+      <div class="row-body"><div class="row-name">${fmt(e.value)} ${u}${delta!=null?`<span class="delta" style="color:${isDrop?'var(--danger)':'var(--t3)'};">${delta>=0?'+':''}${fmt(delta)}</span>`:''}</div><div class="row-sub">${fmtDate(e.date)}${isDrop?' · correction':''}</div></div>
+      <button class="icon-del" onclick="deleteUsageEntry(${v.id},${e.id})" aria-label="Supprimer">${trashSvg}</button>
+    </div>`;
+  }).join('');
+  return `<div class="modal-title">HISTORIQUE DU COMPTEUR</div><div class="modal-desc">${vehTitle(v)} · ${log.length} relevé(s). Supprime un point erroné pour corriger la courbe (n'affecte pas les pleins ni les entretiens liés).</div>
+    ${log.length?rows:`<div class="empty">Aucun relevé.</div>`}
+    <button class="btn btn-secondary" style="margin-top:16px;" onclick="closeModal()">Fermer</button>`;
+}
 function modalExport(){
   const json = buildExport();
   const warn = (sync.token) ? `<div class="empty" style="border-style:solid;border-color:rgba(245,158,11,0.3);color:var(--warn);text-align:left;margin-bottom:12px;font-size:11px;line-height:1.5;">Ce fichier contient ton token de synchronisation : garde-le privé, ne le partage pas publiquement.</div>` : '';
@@ -1352,6 +1532,78 @@ function modalLogUsage(){
     <div class="field"><label class="field-label">Date</label><input id="f-udate" type="date" class="mono" value="${todayISO()}"></div>
     <div class="btn-row"><button class="btn btn-secondary" onclick="closeModal()">Annuler</button><button class="btn btn-primary" onclick="saveUsage()">Enregistrer</button></div>`;
 }
+function modalAddCheck(){
+  const v = byId(state.ctx.vehicleId);
+  const type = state.draft.checkType||'oil';
+  const level = state.draft.checkLevel||'correct';
+  const topped = state.draft.checkTopped ? 'yes' : 'no';
+  return `<div class="modal-title">VÉRIFICATION</div><div class="modal-desc">Contrôle d'un niveau ou de la pression des pneus.</div>
+    <div class="field"><label class="field-label">Élément vérifié</label><div class="chips">${CHECK_TYPES.map(([k,l])=>`<div class="chip ${type===k?'active':''}" onclick="pickChip('checkType','${k}',this)">${l}</div>`).join('')}</div></div>
+    <div class="field"><label class="field-label">État de la jauge</label><div class="chips">${CHECK_LEVELS.map(([k,l])=>`<div class="chip ${level===k?'active':''}" onclick="pickChip('checkLevel','${k}',this)">${l}</div>`).join('')}</div></div>
+    <div class="field"><label class="field-label">Appoint fait ?</label><div class="chips">
+      <div class="chip ${topped==='yes'?'active':''}" onclick="pickChip('checkTopped','yes',this)">Oui</div>
+      <div class="chip ${topped==='no'?'active':''}" onclick="pickChip('checkTopped','no',this)">Non</div>
+    </div></div>
+    <div class="field"><label class="field-label">Quantité ajoutée <span style="color:var(--t3);">(opt.)</span></label><input id="f-checkqty" placeholder="ex : 0,5 L"></div>
+    <div class="field"><label class="field-label">Note <span style="color:var(--t3);">(opt.)</span></label><input id="f-checknote" placeholder="ex : 2,3 bar avant / 2,1 arrière"></div>
+    <div class="field"><label class="field-label">Date</label><input id="f-checkdate" type="date" class="mono" value="${todayISO()}"></div>
+    <div class="btn-row"><button class="btn btn-secondary" onclick="closeModal()">Annuler</button><button class="btn btn-primary" onclick="saveCheck()">Enregistrer</button></div>`;
+}
+function modalChecksAll(){
+  const v = byId(state.ctx.vehicleId);
+  const type = state.ctx.checkType || CHECK_TYPES[0][0];
+  const list = [...(v.checks||[])].filter(c=>c.type===type).sort((a,b)=> new Date(b.date)-new Date(a.date));
+  const tabs = CHECK_TYPES.map(([k,l])=>`<div class="chip ${type===k?'active':''}" onclick="openModal('checksAll',{vehicleId:${v.id},checkType:'${k}'})">${l}</div>`).join('');
+  const rows = list.map(c=>`<div class="row">
+    <div class="row-icon" style="background:${SD[CHECK_LEVEL_COLOR[c.level]]||SD.ok};">${icon(CHECK_ICON[type]||'other', SC[CHECK_LEVEL_COLOR[c.level]]||SC.ok)}</div>
+    <div class="row-body"><div class="row-name">${CHECK_LEVEL_LABEL[c.level]}${c.topped?' · appoint fait':''}${c.qty?` (${escapeHtml(c.qty)})`:''}</div><div class="row-sub">${fmtDate(c.date)}${c.note?' · '+escapeHtml(c.note):''}</div></div>
+    <button class="icon-del" onclick="deleteCheck(${v.id},${c.id})" aria-label="Supprimer">${trashSvg}</button>
+  </div>`).join('');
+  return `<div class="modal-title">HISTORIQUE — ${escapeHtml(CHECK_LABEL[type]||'')}</div><div class="modal-desc">${vehTitle(v)}</div>
+    <div class="chips" style="margin-bottom:12px;">${tabs}</div>
+    ${list.length?rows:`<div class="empty">Aucune vérification enregistrée pour cet élément.</div>`}
+    <button class="btn btn-primary" style="margin-top:12px;" onclick="openModal('addCheck',{vehicleId:${v.id},checkType:'${type}'})">Faire une vérification</button>
+    <button class="btn btn-secondary" style="margin-top:10px;" onclick="closeModal()">Fermer</button>`;
+}
+function modalAddNote(){
+  return `<div class="modal-title">NOUVELLE NOTE</div><div class="modal-desc">Un rappel libre, daté (bruit inhabituel, point à surveiller…).</div>
+    <div class="field"><label class="field-label">Note</label><textarea id="f-notetext" placeholder="ex : léger bruit au freinage à surveiller" style="height:90px;resize:none;"></textarea></div>
+    <div class="field"><label class="field-label">Date</label><input id="f-notedate" type="date" class="mono" value="${todayISO()}"></div>
+    <div class="btn-row"><button class="btn btn-secondary" onclick="closeModal()">Annuler</button><button class="btn btn-primary" onclick="saveNote()">Ajouter</button></div>`;
+}
+function setCompareVehicle(which, id){
+  if(which==='a') state.ctx.cmpA = id?Number(id):null; else state.ctx.cmpB = id?Number(id):null;
+  renderModal();
+}
+function modalCompareVehicles(){
+  const opts = v => `<option value="${v.id}">${escapeHtml(vehTitle(v))}${v.status==='sold'?' (vendu)':v.status==='for_sale'?' (en vente)':''}</option>`;
+  const selectHtml = (which, selId) => `<select onchange="setCompareVehicle('${which}',this.value)">
+      <option value="">— Choisir —</option>${vehicles.map(v=>`<option value="${v.id}" ${v.id===selId?'selected':''}>${escapeHtml(vehTitle(v))}${v.status==='sold'?' (vendu)':v.status==='for_sale'?' (en vente)':''}</option>`).join('')}
+    </select>`;
+  const a = byId(state.ctx.cmpA), b = byId(state.ctx.cmpB);
+  let rows = '';
+  if(a && b){
+    const ca = vehicleCompareStats(a), cb = vehicleCompareStats(b);
+    const line = (label, va, vb) => `<div class="cmp-row"><div class="cmp-l">${va}</div><div class="cmp-m">${label}</div><div class="cmp-r">${vb}</div></div>`;
+    rows = `<div class="cmp-table">
+      ${line('Statut', a.status==='sold'?'Vendu':a.status==='for_sale'?'En vente':'En parc', b.status==='sold'?'Vendu':b.status==='for_sale'?'En vente':'En parc')}
+      ${line(unitName(a), fmt(a.usage)+' '+unitL(a), fmt(b.usage)+' '+unitL(b))}
+      ${line('Dépenses totales', fmtPrice(ca.total), fmtPrice(cb.total))}
+      ${line('Coût / unité', ca.cpuLabel, cb.cpuLabel)}
+      ${line('Consommation', ca.consLabel, cb.consLabel)}
+      ${line(ca.valueSub==='prix de vente'||cb.valueSub==='prix de vente' ? 'Valeur / prix de vente' : 'Valeur estimée', ca.valueLabel, cb.valueLabel)}
+    </div>`;
+  } else {
+    rows = `<div class="empty">Choisis deux véhicules à comparer (les véhicules vendus sont inclus).</div>`;
+  }
+  return `<div class="modal-title">COMPARER DEUX VÉHICULES</div><div class="modal-desc">Inclut les véhicules vendus.</div>
+    <div class="field-row">
+      <div class="field">${selectHtml('a', state.ctx.cmpA)}</div>
+      <div class="field">${selectHtml('b', state.ctx.cmpB)}</div>
+    </div>
+    ${rows}
+    <button class="btn btn-secondary" style="margin-top:14px;" onclick="closeModal()">Fermer</button>`;
+}
 function modalSaleListing(){
   const v = byId(state.ctx.vehicleId);
   const txt = buildSaleListing(v);
@@ -1371,6 +1623,9 @@ function openModal(name, ctx){
   if(name==='addDeadline')state.draft.recurrence='none';
   if(name==='editReco'){ const v=byId(ctx.vehicleId); const r=v.recos.find(x=>x.id===ctx.recoId); state.draft.recoType=r.type; }
   if(name==='editDeadline'){ const v=byId(ctx.vehicleId); const d=v.deadlines.find(x=>x.id===ctx.deadlineId); state.draft.recurrence=d.recurrence||'none'; }
+  if(name==='addCheck'){ state.draft.checkType=ctx.checkType||'oil'; state.draft.checkLevel='correct'; state.draft.checkTopped=false; }
+  if(name==='checksAll'){ state.ctx.checkType = ctx.checkType || (CHECK_TYPES[0]||[])[0]; }
+  if(name==='compareVehicles'){ state.ctx.cmpA = vehicles[0] ? vehicles[0].id : null; state.ctx.cmpB = vehicles[1] ? vehicles[1].id : null; }
   renderModal();
 }
 function closeModal(){ state.modal=null; state.ctx={}; state.draft={}; _confirmCb=null; _choiceA=null; _choiceB=null; renderModal(); }
@@ -1382,7 +1637,8 @@ function pickChip(group, value, el){
 function toast(msg){
   const t = document.getElementById('toast'); if(!t) return;
   t.textContent = msg; t.classList.add('show');
-  clearTimeout(window._tt); window._tt = setTimeout(()=>t.classList.remove('show'), 2200);
+  const dur = Math.min(6000, Math.max(2200, msg.length*45));
+  clearTimeout(window._tt); window._tt = setTimeout(()=>t.classList.remove('show'), dur);
 }
 function confirmDialog(title, message, confirmLabel, onYes, danger){
   state.modal='confirm'; state.ctx={title, message, confirmLabel:confirmLabel||'Confirmer', danger: danger!==false}; _confirmCb=onYes; renderModal();
@@ -1422,7 +1678,7 @@ function saveVehicle(){
     year:num('f-year')||null, plate:val('f-plate'), unit:state.draft.unit||'km', usage,
     fuel:val('f-fuel')||'Essence', purchasePrice:price, estValue: price?Math.round(price*0.85):0,
     status:'owned', salePrice:null, tags:parseTags('f-tags'),
-    recos:[], history:[], deadlines:[], fuelLogs:[], usageLog:[{id:++nextId, date:todayISO(), value:usage}],
+    recos:[], history:[], deadlines:[], fuelLogs:[], usageLog:[{id:++nextId, date:todayISO(), value:usage}], notes:[], checks:[],
   });
   closeModal(); state.tab='garage'; save(); render(); toast('Véhicule ajouté');
 }
@@ -1520,21 +1776,43 @@ function deleteDeadline(vid, did){
 }
 
 /* fuel */
-function saveFuel(){
-  const v=byId(state.ctx.vehicleId); const liters=flt('f-liters'); const dist=num('f-dist'); const cost=flt('f-fcost'); const date=val('f-fdate')||todayISO();
-  if(!liters||!dist){ toast('Renseigne la quantité et la distance.'); return; }
+function latestReading(v){
+  const log = v.usageLog||[]; if(!log.length) return null;
+  return [...log].sort((a,b)=> new Date(b.date)-new Date(a.date))[0];
+}
+function daysAgo(dateStr){ return Math.max(0, Math.round((new Date()-new Date(dateStr))/86400000)); }
+function distanceWarning(v, dist){
+  const recent = v.fuelLogs.slice(-5).map(f=>f.distance).filter(d=>d>0);
+  if(recent.length<2) return null;
+  const avg = recent.reduce((s,d)=>s+d,0)/recent.length;
+  if(dist > avg*3.5 && dist-avg > 300) return `Distance très supérieure à ta moyenne récente (~${fmt(Math.round(avg))} ${unitL(v)}) : vérifie que c'est bien la distance depuis le dernier plein, pas le compteur total.`;
+  return null;
+}
+function doSaveFuel(v, liters, dist, cost, date){
   v.fuelLogs.push({id:++nextId, date, liters, distance:dist, cost}); v.usage += dist;
   logUsage(v, v.usage, date);
   closeModal(); save(); render(); toast(isElectric(v)?'Recharge ajoutée':'Plein ajouté');
+}
+function saveFuel(){
+  const v=byId(state.ctx.vehicleId); const liters=flt('f-liters'); const dist=num('f-dist'); const cost=flt('f-fcost'); const date=val('f-fdate')||todayISO();
+  if(!liters||!dist){ toast('Renseigne la quantité et la distance.'); return; }
+  const warn = distanceWarning(v, dist);
+  if(warn){ confirmDialog('Kilométrage inhabituel', warn+' Confirmer quand même ?', 'Confirmer et enregistrer', ()=>doSaveFuel(v, liters, dist, cost, date)); return; }
+  doSaveFuel(v, liters, dist, cost, date);
+}
+function doSaveEditFuel(v, f, liters, dist, cost, date){
+  v.usage += (dist - f.distance); if(v.usage<0) v.usage=0;
+  f.liters=liters; f.distance=dist; f.cost=cost; f.date=date;
+  logUsage(v, v.usage, date);
+  closeModal(); save(); render(); toast('Plein modifié');
 }
 function saveEditFuel(){
   const v=byId(state.ctx.vehicleId); const f=v.fuelLogs.find(x=>x.id===state.ctx.fuelId);
   const liters=flt('f-liters'); const dist=num('f-dist'); const cost=flt('f-fcost'); const date=val('f-fdate')||f.date;
   if(!liters||!dist){ toast('Renseigne la quantité et la distance.'); return; }
-  v.usage += (dist - f.distance); if(v.usage<0) v.usage=0;
-  f.liters=liters; f.distance=dist; f.cost=cost; f.date=date;
-  logUsage(v, v.usage, date);
-  closeModal(); save(); render(); toast('Plein modifié');
+  const warn = distanceWarning({...v, fuelLogs: v.fuelLogs.filter(x=>x.id!==f.id)}, dist);
+  if(warn){ confirmDialog('Kilométrage inhabituel', warn+' Confirmer quand même ?', 'Confirmer et enregistrer', ()=>doSaveEditFuel(v, f, liters, dist, cost, date)); return; }
+  doSaveEditFuel(v, f, liters, dist, cost, date);
 }
 function deleteFuel(vid, fid){
   const v=byId(vid); const f=v.fuelLogs.find(x=>x.id===fid);
@@ -1546,6 +1824,60 @@ function saveUsage(){
   const v=byId(state.ctx.vehicleId); const value=num('f-ukm'); const date=val('f-udate')||todayISO();
   v.usage=value; logUsage(v, value, date);
   closeModal(); save(); render(); toast('Compteur mis à jour');
+}
+function deleteUsageEntry(vid, entryId){
+  const v = byId(vid);
+  confirmDialog('Supprimer ce point', 'Ce relevé sera retiré de la courbe du compteur. Les pleins et entretiens liés ne sont pas modifiés.', 'Supprimer', ()=>{
+    v.usageLog = (v.usageLog||[]).filter(e=>e.id!==entryId);
+    if(v.usageLog.length){
+      const latest = [...v.usageLog].sort((a,b)=> new Date(b.date)-new Date(a.date))[0];
+      v.usage = latest.value;
+    }
+    save();
+    if(v.usageLog.length){ render(); openModal('usageAll',{vehicleId:vid}); }
+    else { closeModal(); render(); }
+    toast('Point supprimé');
+  });
+}
+
+/* vérifications (niveaux, pression) */
+function saveCheck(){
+  const v = byId(state.ctx.vehicleId);
+  const type = state.draft.checkType||'oil';
+  const level = state.draft.checkLevel||'correct';
+  const topped = state.draft.checkTopped === 'yes';
+  const qty = val('f-checkqty'); const note = val('f-checknote'); const date = val('f-checkdate')||todayISO();
+  v.checks = v.checks || [];
+  v.checks.push({id:++nextId, type, level, topped, qty, note, date});
+  closeModal(); save(); render(); toast('Vérification enregistrée');
+}
+function deleteCheck(vid, checkId){
+  const v = byId(vid);
+  confirmDialog('Supprimer cette vérification', 'Cette entrée sera retirée de l\'historique.', 'Supprimer', ()=>{
+    const type = (v.checks.find(c=>c.id===checkId)||{}).type;
+    v.checks = (v.checks||[]).filter(c=>c.id!==checkId);
+    save();
+    if((v.checks||[]).some(c=>c.type===type)){ render(); openModal('checksAll',{vehicleId:vid, checkType:type}); }
+    else { closeModal(); render(); }
+    toast('Vérification supprimée');
+  });
+}
+
+/* notes libres */
+function saveNote(){
+  const v = byId(state.ctx.vehicleId);
+  const text = val('f-notetext').trim(); const date = val('f-notedate')||todayISO();
+  if(!text){ toast('Écris une note avant de valider.'); return; }
+  v.notes = v.notes || [];
+  v.notes.push({id:++nextId, text, date});
+  closeModal(); save(); render(); toast('Note ajoutée');
+}
+function deleteNote(vid, noteId){
+  const v = byId(vid);
+  confirmDialog('Supprimer la note', 'Cette note sera définitivement supprimée.', 'Supprimer', ()=>{
+    v.notes = (v.notes||[]).filter(n=>n.id!==noteId);
+    save(); render(); toast('Note supprimée');
+  });
 }
 
 /* fiche de vente */
