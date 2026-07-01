@@ -260,11 +260,20 @@ const CATMAP = { voiture:'voiture', moto:'moto', motocross:'moto', cyclomoteur:'
 const catLabel = v => CAT[v.category] || 'Autre';
 
 /* ════════════ VÉRIFICATIONS (niveaux, pression…) ════════════ */
-const CHECK_TYPES = [['oil','Huile moteur'],['coolant','Liquide de refroidissement'],['brake','Liquide de frein'],['washer','Lave-glace'],['tire','Pression pneus'],['other','Autre']];
-const CHECK_LABEL = Object.fromEntries(CHECK_TYPES);
-const CHECK_LEVELS = [['bas','Bas'],['correct','Correct'],['plein','Plein']];
-const CHECK_LEVEL_LABEL = Object.fromEntries(CHECK_LEVELS);
-const CHECK_LEVEL_COLOR = { bas:'danger', correct:'ok', plein:'ok' };
+const BUILTIN_CHECK_ITEMS = [
+  {key:'oil', label:'Huile moteur', mode:'level'},
+  {key:'coolant', label:'Liquide de refroidissement', mode:'level'},
+  {key:'brake', label:'Liquide de frein', mode:'level'},
+  {key:'washer', label:'Lave-glace', mode:'level'},
+  {key:'tire', label:'Pression pneus', mode:'pressure'},
+];
+const LEVEL_SETS = {
+  level:    [['bas','Bas'],['correct','Correct'],['plein','Plein']],
+  pressure: [['basse','Basse'],['correct','Correct'],['haute','Haute']],
+};
+const LEVEL_LABEL = { bas:'Bas', correct:'Correct', plein:'Plein', basse:'Basse', haute:'Haute' };
+function levelColor(level){ return level==='bas'||level==='basse' ? 'danger' : (level==='haute' ? 'warn' : 'ok'); }
+function measureFieldLabel(item){ return item.mode==='pressure' ? item.label : 'État de la jauge'; }
 
 /* ════════════ DEFAULT DATA ════════════ */
 function defaultData(){
@@ -292,10 +301,19 @@ function migrate(){
     v.usageLog = v.usageLog || [];
     v.notes = v.notes || [];
     v.checks = v.checks || [];
+    v.specs = v.specs || [];
     if(!v.usageLog.length) v.usageLog.push({id:++nextId, date:todayISO(), value:v.usage||0});
     v.recos.forEach(r=>{ if(r.intervalMonths===undefined) r.intervalMonths=null; if(r.interval===undefined) r.interval=null; });
     v.history.forEach(h=>{ if(h.cost==null) h.cost=0; });
     v.fuelLogs.forEach(f=>{ if(f.cost==null) f.cost=0; });
+    /* vérifications : items intégrés + préservation d'anciennes entrées "Autre" */
+    if(!v.checkItems){
+      v.checkItems = BUILTIN_CHECK_ITEMS.map(it=>({key:it.key, label:it.label, mode:it.mode, custom:false, recurrenceMonths:null}));
+    }
+    v.checkItems.forEach(it=>{ if(it.recurrenceMonths===undefined) it.recurrenceMonths=null; if(it.custom===undefined) it.custom=false; });
+    if(v.checks.some(c=>c.type==='other') && !v.checkItems.some(it=>it.key==='other')){
+      v.checkItems.push({key:'other', label:'Autre (ancien)', mode:'level', custom:true, recurrenceMonths:null});
+    }
   });
 }
 function load(){
@@ -412,12 +430,23 @@ function deadlineStatus(d){
   if(days < settings.warnDays) return {s:'warn', label:'Bientôt', detail:`Dans ${days} j · ${fmtDate(d.date)}${rec}`, days};
   return {s:'info', label:'Planifié', detail:`${fmtDate(d.date)}${rec}`, days};
 }
+function checkStatus(item, v){
+  if(!item.recurrenceMonths || item.recurrenceMonths<=0) return null;
+  const last = latestCheckOf(v, item.key);
+  if(!last) return {s:'info', label:'À planifier', detail:`Tous les ${item.recurrenceMonths} mois · jamais vérifié`, days:998};
+  const next = addMonthsISO(last.date, item.recurrenceMonths);
+  const days = daysUntil(next);
+  if(days<0) return {s:'danger', label:'En retard', detail:`Dépassé de ${-days} j · dernier le ${fmtDate(last.date)}`, days};
+  if(days<settings.warnDays) return {s:'warn', label:'Bientôt', detail:`Dans ${days} j · dernier le ${fmtDate(last.date)}`, days};
+  return {s:'ok', label:'À jour', detail:`Dans ${days} j · dernier le ${fmtDate(last.date)}`, days};
+}
 function vehicleStatus(v){
   if(v.status === 'sold')     return {s:'sold', label:'Vendu'};
   if(v.status === 'for_sale') return {s:'sale', label:'En vente'};
   let worst = 'ok', alerts = 0;
   v.recos.forEach(r => { const s = recoStatus(r,v).s; if(s==='danger'){worst='danger';alerts++;} else if(s==='warn'){if(worst!=='danger')worst='warn';alerts++;} });
   v.deadlines.forEach(d => { const s = deadlineStatus(d).s; if(s==='danger'){worst='danger';alerts++;} else if(s==='warn'){if(worst!=='danger')worst='warn';alerts++;} });
+  (v.checkItems||[]).forEach(it => { const cs = checkStatus(it,v); if(!cs) return; if(cs.s==='danger'){worst='danger';alerts++;} else if(cs.s==='warn'){if(worst!=='danger')worst='warn';alerts++;} });
   return {s: worst, label: worst==='ok' ? 'À jour' : `${alerts} alerte${alerts>1?'s':''}`, alerts};
 }
 function allAlerts(){
@@ -427,6 +456,8 @@ function allAlerts(){
       out.push({veh:v, name:r.name, type:r.type, st, prio: st.s==='danger'?0:1, sort: st.urgency, short: st.short}); } });
     v.deadlines.forEach(d=>{ const st=deadlineStatus(d); if(st.s==='danger'||st.s==='warn'){
       out.push({veh:v, name:d.name, type:'date', st, prio: st.s==='danger'?0:1, sort: st.days/(settings.warnDays||1), short: st.days<0?`+${-st.days} j`:`${st.days} j`}); } });
+    (v.checkItems||[]).forEach(it=>{ const st=checkStatus(it,v); if(st && (st.s==='danger'||st.s==='warn')){
+      out.push({veh:v, name:it.label, type: it.mode==='pressure'?'tire':'drop', st, prio: st.s==='danger'?0:1, sort: st.days/(settings.warnDays||1), short: st.days<0?`+${-st.days} j`:`${st.days} j`}); } });
   });
   return out.sort((a,b)=> a.prio-b.prio || a.sort-b.sort);
 }
@@ -695,22 +726,30 @@ function tcoSection(v){
     <div class="detail-cell"><div class="detail-cell-l">Distance suivie</div><div class="detail-cell-v">${fmt(dist)} ${u}</div></div>
   </div>`;
 }
-const CHECK_ICON = { oil:'oil', coolant:'drop', brake:'brake', washer:'drop', tire:'tire', other:'other' };
+function checkIconFor(item){ if(item.key==='oil') return 'oil'; if(item.key==='brake') return 'brake'; if(item.mode==='pressure') return 'tire'; return 'drop'; }
 function latestCheckOf(v, type){
   const list = (v.checks||[]).filter(c=>c.type===type);
   if(!list.length) return null;
   return [...list].sort((a,b)=> new Date(b.date)-new Date(a.date))[0];
 }
 function checksSection(v){
-  const rows = CHECK_TYPES.map(([type,label])=>{
-    const c = latestCheckOf(v, type);
-    const color = c ? (SC[CHECK_LEVEL_COLOR[c.level]]||SC.ok) : 'var(--t3)';
-    const bg = c ? (SD[CHECK_LEVEL_COLOR[c.level]]||SD.ok) : 'var(--bg-4)';
-    const sub = c ? `${CHECK_LEVEL_LABEL[c.level]}${c.topped?' · appoint fait':''} · il y a ${daysAgo(c.date)} j` : 'Jamais vérifié';
-    return `<div class="row tap" onclick="openModal('checksAll',{vehicleId:${v.id},checkType:'${type}'})">
-      <div class="row-icon" style="background:${bg};">${icon(CHECK_ICON[type]||'other', color)}</div>
-      <div class="row-body"><div class="row-name">${label}</div><div class="row-sub">${sub}</div></div>
-      ${c?`<span class="badge ${CHECK_LEVEL_COLOR[c.level]}"><span class="dot"></span>${CHECK_LEVEL_LABEL[c.level]}</span>`:''}
+  const items = v.checkItems || [];
+  if(!items.length) return `<div class="empty">Aucun élément à vérifier. Ajoutes-en un.</div>`;
+  const rows = items.map(item=>{
+    const c = latestCheckOf(v, item.key);
+    const rs = checkStatus(item, v); // statut de récurrence (peut être null si pas de rappel configuré)
+    const lc = c ? levelColor(c.level) : null;
+    const worstS = rs && (rs.s==='danger'||rs.s==='warn') ? rs.s : lc;
+    const color = worstS ? (SC[worstS]||SC.ok) : 'var(--t3)';
+    const bg = worstS ? (SD[worstS]||SD.ok) : 'var(--bg-4)';
+    const recBit = item.recurrenceMonths ? ` · rappel tous les ${item.recurrenceMonths} mois` : '';
+    const sub = c ? `${LEVEL_LABEL[c.level]}${c.topped?' · appoint fait':''} · il y a ${daysAgo(c.date)} j${recBit}` : `Jamais vérifié${recBit}`;
+    const badge = rs && (rs.s==='danger'||rs.s==='warn') ? `<span class="badge ${rs.s}"><span class="dot"></span>${rs.label}</span>`
+                : c ? `<span class="badge ${lc}"><span class="dot"></span>${LEVEL_LABEL[c.level]}</span>` : '';
+    return `<div class="row tap" onclick="openModal('checksAll',{vehicleId:${v.id},checkType:'${item.key}'})">
+      <div class="row-icon" style="background:${bg};">${icon(checkIconFor(item), color)}</div>
+      <div class="row-body"><div class="row-name">${escapeHtml(item.label)}</div><div class="row-sub">${sub}</div></div>
+      ${badge}
     </div>`;
   }).join('');
   return rows;
@@ -722,6 +761,16 @@ function notesSection(v){
     <div class="row-icon" style="background:var(--bg-4);">${icon('other','var(--t2)')}</div>
     <div class="row-body"><div class="row-name">${escapeHtml(n.text)}</div><div class="row-sub">${fmtDate(n.date)}</div></div>
     <button class="icon-del" onclick="deleteNote(${v.id},${n.id})" aria-label="Supprimer">${trashSvg}</button>
+  </div>`).join('');
+}
+const SPEC_SUGGESTIONS = ['Capacité huile moteur','Capacité huile boîte','Capacité huile de pont','Capacité liquide de refroidissement','Pression pneus avant (solo)','Pression pneus avant (chargé)','Pression pneus arrière (solo)','Pression pneus arrière (chargé)','Couple de serrage roues','Carburant recommandé'];
+function specsSection(v){
+  const list = v.specs||[];
+  if(!list.length) return `<div class="empty">Aucune donnée constructeur enregistrée (capacités, pressions…).</div>`;
+  return list.map(s=>`<div class="row tap" onclick="openModal('editSpec',{vehicleId:${v.id},specId:${s.id}})">
+    <div class="row-icon" style="background:var(--bg-4);">${icon('other','var(--t2)')}</div>
+    <div class="row-body"><div class="row-name">${escapeHtml(s.label)}</div><div class="row-sub">${escapeHtml(s.value)}${s.unit?' '+escapeHtml(s.unit):''}</div></div>
+    <button class="icon-del" onclick="event.stopPropagation();deleteSpec(${v.id},${s.id})" aria-label="Supprimer">${trashSvg}</button>
   </div>`).join('');
 }
 function fuelRow(v, f, sortedDesc, i){
@@ -841,7 +890,7 @@ function sidebarHtml(){
     const attr = it.filled ? (active?`fill="${col}"`:`fill="none" stroke="${col}" stroke-width="1.4"`) : `stroke="${col}" stroke-width="1.4" fill="none" stroke-linejoin="round" stroke-linecap="round"`;
     return `<button class="side-item ${active?'active':''}" onclick="switchTab('${it.id}')"><svg width="19" height="19" viewBox="0 0 18 19" ${attr}>${it.svg}</svg><span>${it.label}</span></button>`;
   }).join('');
-  return `<aside class="sidebar"><div class="side-logo"><span>PITSTOP</span> <span style="color:var(--accent);">MANAGER</span></div><nav class="side-nav">${links}</nav><div class="side-foot">v1.5 · données locales</div></aside>`;
+  return `<aside class="sidebar"><div class="side-logo"><span>PITSTOP</span> <span style="color:var(--accent);">MANAGER</span></div><nav class="side-nav">${links}</nav><div class="side-foot">v1.5.1 · données locales</div></aside>`;
 }
 function headerMeta(t){
   if(t==='home'){ const greet = settings.name ? `Bonjour ${settings.name}` : 'Ton parc'; return {title:greet, sub:'Vue d\'ensemble de ton parc'}; }
@@ -1046,6 +1095,11 @@ function viewDetail(id){
     </div>
   </div>`;
 
+  /* fiche technique (données constructeur, personnalisable) */
+  html += `<div class="sec-title">Fiche technique</div>`;
+  html += specsSection(v);
+  html += addBtn('Ajouter une donnée', `openModal('addSpec',{vehicleId:${v.id}})`);
+
   /* consommation / énergie */
   const avg = avgCons(v);
   const elec = isElectric(v); const eu = energyUnit(v);
@@ -1074,6 +1128,7 @@ function viewDetail(id){
   html += `<div class="sec-title">Vérifications</div>`;
   html += checksSection(v);
   html += addBtn('Faire une vérification', `openModal('addCheck',{vehicleId:${v.id}})`);
+  html += `<button class="btn btn-secondary" style="margin-top:10px;" onclick="openModal('addCheckItem',{vehicleId:${v.id}})">Ajouter un élément à vérifier</button>`;
 
   /* coût de possession */
   html += `<div class="sec-title">Coût de possession</div>`;
@@ -1275,7 +1330,7 @@ function viewProfil(){
       : `<button class="btn btn-primary" onclick="activateSync()">Activer la synchronisation</button>`}
     <div style="font-size:10.5px;color:var(--t3);line-height:1.5;margin-top:10px;">Le token est stocké uniquement sur cet appareil et n'est jamais inclus dans les exports. Crée-le sur GitHub → Settings → Developer settings → Fine-grained tokens, limité à ce seul dépôt.</div>
 
-    <div style="text-align:center;margin-top:24px;"><div style="font-family:var(--f-display);font-size:18px;font-weight:800;letter-spacing:0.04em;color:var(--t3);">PITSTOP <span style="color:var(--accent);">MANAGER</span></div><div style="font-family:var(--f-data);font-size:10px;color:var(--t3);letter-spacing:0.12em;margin-top:3px;">v1.5</div></div>
+    <div style="text-align:center;margin-top:24px;"><div style="font-family:var(--f-display);font-size:18px;font-weight:800;letter-spacing:0.04em;color:var(--t3);">PITSTOP <span style="color:var(--accent);">MANAGER</span></div><div style="font-family:var(--f-data);font-size:10px;color:var(--t3);letter-spacing:0.12em;margin-top:3px;">v1.5.1</div></div>
   </div>`;
 }
 
@@ -1312,7 +1367,11 @@ function renderModal(){
     case 'choice':          inner = modalChoice(); break;
     case 'addCheck':        inner = modalAddCheck(); break;
     case 'checksAll':       inner = modalChecksAll(); break;
+    case 'addCheckItem':    inner = modalAddCheckItem(); break;
+    case 'editCheckItem':   inner = modalEditCheckItem(); break;
     case 'addNote':         inner = modalAddNote(); break;
+    case 'addSpec':         inner = modalAddSpec(); break;
+    case 'editSpec':        inner = modalEditSpec(); break;
     case 'compareVehicles': inner = modalCompareVehicles(); break;
   }
   m.innerHTML = `<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal"><div class="modal-handle"></div>${inner}</div></div>`;
@@ -1534,12 +1593,15 @@ function modalLogUsage(){
 }
 function modalAddCheck(){
   const v = byId(state.ctx.vehicleId);
-  const type = state.draft.checkType||'oil';
+  const items = v.checkItems||[];
+  const type = state.draft.checkType || (items[0]?items[0].key:'oil');
+  const item = items.find(it=>it.key===type) || items[0] || {key:'oil',label:'Huile moteur',mode:'level'};
+  const levels = LEVEL_SETS[item.mode] || LEVEL_SETS.level;
   const level = state.draft.checkLevel||'correct';
   const topped = state.draft.checkTopped ? 'yes' : 'no';
   return `<div class="modal-title">VÉRIFICATION</div><div class="modal-desc">Contrôle d'un niveau ou de la pression des pneus.</div>
-    <div class="field"><label class="field-label">Élément vérifié</label><div class="chips">${CHECK_TYPES.map(([k,l])=>`<div class="chip ${type===k?'active':''}" onclick="pickChip('checkType','${k}',this)">${l}</div>`).join('')}</div></div>
-    <div class="field"><label class="field-label">État de la jauge</label><div class="chips">${CHECK_LEVELS.map(([k,l])=>`<div class="chip ${level===k?'active':''}" onclick="pickChip('checkLevel','${k}',this)">${l}</div>`).join('')}</div></div>
+    <div class="field"><label class="field-label">Élément vérifié</label><div class="chips">${items.map(it=>`<div class="chip ${type===it.key?'active':''}" onclick="pickCheckType('${it.key}')">${escapeHtml(it.label)}</div>`).join('')}</div></div>
+    <div class="field"><label class="field-label">${measureFieldLabel(item)}</label><div class="chips">${levels.map(([k,l])=>`<div class="chip ${level===k?'active':''}" onclick="pickChip('checkLevel','${k}',this)">${l}</div>`).join('')}</div></div>
     <div class="field"><label class="field-label">Appoint fait ?</label><div class="chips">
       <div class="chip ${topped==='yes'?'active':''}" onclick="pickChip('checkTopped','yes',this)">Oui</div>
       <div class="chip ${topped==='no'?'active':''}" onclick="pickChip('checkTopped','no',this)">Non</div>
@@ -1549,27 +1611,75 @@ function modalAddCheck(){
     <div class="field"><label class="field-label">Date</label><input id="f-checkdate" type="date" class="mono" value="${todayISO()}"></div>
     <div class="btn-row"><button class="btn btn-secondary" onclick="closeModal()">Annuler</button><button class="btn btn-primary" onclick="saveCheck()">Enregistrer</button></div>`;
 }
+function pickCheckType(key){ state.draft.checkType=key; state.draft.checkLevel='correct'; renderModal(); }
 function modalChecksAll(){
   const v = byId(state.ctx.vehicleId);
-  const type = state.ctx.checkType || CHECK_TYPES[0][0];
+  const items = v.checkItems||[];
+  const type = state.ctx.checkType || (items[0]?items[0].key:null);
+  const item = items.find(it=>it.key===type);
+  if(!item) return `<div class="modal-title">VÉRIFICATIONS</div><div class="empty">Aucun élément à vérifier.</div><button class="btn btn-secondary" onclick="closeModal()">Fermer</button>`;
   const list = [...(v.checks||[])].filter(c=>c.type===type).sort((a,b)=> new Date(b.date)-new Date(a.date));
-  const tabs = CHECK_TYPES.map(([k,l])=>`<div class="chip ${type===k?'active':''}" onclick="openModal('checksAll',{vehicleId:${v.id},checkType:'${k}'})">${l}</div>`).join('');
+  const tabs = items.map(it=>`<div class="chip ${type===it.key?'active':''}" onclick="openModal('checksAll',{vehicleId:${v.id},checkType:'${it.key}'})">${escapeHtml(it.label)}</div>`).join('');
   const rows = list.map(c=>`<div class="row">
-    <div class="row-icon" style="background:${SD[CHECK_LEVEL_COLOR[c.level]]||SD.ok};">${icon(CHECK_ICON[type]||'other', SC[CHECK_LEVEL_COLOR[c.level]]||SC.ok)}</div>
-    <div class="row-body"><div class="row-name">${CHECK_LEVEL_LABEL[c.level]}${c.topped?' · appoint fait':''}${c.qty?` (${escapeHtml(c.qty)})`:''}</div><div class="row-sub">${fmtDate(c.date)}${c.note?' · '+escapeHtml(c.note):''}</div></div>
+    <div class="row-icon" style="background:${SD[levelColor(c.level)]};">${icon(checkIconFor(item), SC[levelColor(c.level)])}</div>
+    <div class="row-body"><div class="row-name">${LEVEL_LABEL[c.level]}${c.topped?' · appoint fait':''}${c.qty?` (${escapeHtml(c.qty)})`:''}</div><div class="row-sub">${fmtDate(c.date)}${c.note?' · '+escapeHtml(c.note):''}</div></div>
     <button class="icon-del" onclick="deleteCheck(${v.id},${c.id})" aria-label="Supprimer">${trashSvg}</button>
   </div>`).join('');
-  return `<div class="modal-title">HISTORIQUE — ${escapeHtml(CHECK_LABEL[type]||'')}</div><div class="modal-desc">${vehTitle(v)}</div>
+  const recInfo = item.recurrenceMonths ? `Rappel tous les ${item.recurrenceMonths} mois (visible dans Échéances).` : `Pas de rappel automatique configuré.`;
+  return `<div class="modal-title">HISTORIQUE — ${escapeHtml(item.label)}</div><div class="modal-desc">${vehTitle(v)} · ${recInfo}</div>
     <div class="chips" style="margin-bottom:12px;">${tabs}</div>
     ${list.length?rows:`<div class="empty">Aucune vérification enregistrée pour cet élément.</div>`}
     <button class="btn btn-primary" style="margin-top:12px;" onclick="openModal('addCheck',{vehicleId:${v.id},checkType:'${type}'})">Faire une vérification</button>
+    <button class="btn btn-secondary" style="margin-top:10px;" onclick="openModal('editCheckItem',{vehicleId:${v.id},checkType:'${type}'})">Modifier ce rappel${item.custom?' / renommer':''}</button>
     <button class="btn btn-secondary" style="margin-top:10px;" onclick="closeModal()">Fermer</button>`;
+}
+function modalAddCheckItem(){
+  const mode = state.draft.itemMode||'level';
+  return `<div class="modal-title">NOUVEL ÉLÉMENT À VÉRIFIER</div><div class="modal-desc">Ajoute ce que tu veux contrôler sur ce véhicule (ex : huile de pont, courroie accessoire…).</div>
+    <div class="field"><label class="field-label">Nom</label><input id="f-itemlabel" placeholder="ex : Huile de pont arrière"></div>
+    <div class="field"><label class="field-label">Type de mesure</label><div class="chips">
+      <div class="chip ${mode==='level'?'active':''}" onclick="pickChip('itemMode','level',this)">Niveau (Bas/Correct/Plein)</div>
+      <div class="chip ${mode==='pressure'?'active':''}" onclick="pickChip('itemMode','pressure',this)">Pression (Basse/Correct/Haute)</div>
+    </div></div>
+    <div class="field"><label class="field-label">Rappel automatique <span style="color:var(--t3);">(mois, opt.)</span></label><input id="f-itemrec" class="mono" inputmode="numeric" placeholder="ex : 12"></div>
+    <div class="btn-row"><button class="btn btn-secondary" onclick="closeModal()">Annuler</button><button class="btn btn-primary" onclick="saveCheckItem()">Ajouter</button></div>`;
+}
+function modalEditCheckItem(){
+  const v = byId(state.ctx.vehicleId);
+  const item = (v.checkItems||[]).find(it=>it.key===state.ctx.checkType);
+  if(!item) return `<div class="modal-title">ÉLÉMENT</div><div class="empty">Élément introuvable.</div><button class="btn btn-secondary" onclick="closeModal()">Fermer</button>`;
+  return `<div class="modal-title">${item.custom?"MODIFIER L'ÉLÉMENT":'RAPPEL'}</div><div class="modal-desc">${escapeHtml(item.label)}</div>
+    ${item.custom?`<div class="field"><label class="field-label">Nom</label><input id="f-itemlabel2" value="${escapeHtml(item.label)}"></div>`:''}
+    <div class="field"><label class="field-label">Rappel automatique <span style="color:var(--t3);">(mois, vide = aucun)</span></label><input id="f-itemrec2" class="mono" inputmode="numeric" value="${item.recurrenceMonths||''}" placeholder="ex : 12"></div>
+    <div class="btn-row"><button class="btn btn-secondary" onclick="closeModal()">Annuler</button><button class="btn btn-primary" onclick="saveCheckItemEdit()">Enregistrer</button></div>
+    ${item.custom?`<button class="btn btn-danger" style="margin-top:10px;" onclick="deleteCheckItem(${v.id},'${item.key}')">${trashSvg}Supprimer cet élément</button>`:''}`;
 }
 function modalAddNote(){
   return `<div class="modal-title">NOUVELLE NOTE</div><div class="modal-desc">Un rappel libre, daté (bruit inhabituel, point à surveiller…).</div>
     <div class="field"><label class="field-label">Note</label><textarea id="f-notetext" placeholder="ex : léger bruit au freinage à surveiller" style="height:90px;resize:none;"></textarea></div>
     <div class="field"><label class="field-label">Date</label><input id="f-notedate" type="date" class="mono" value="${todayISO()}"></div>
     <div class="btn-row"><button class="btn btn-secondary" onclick="closeModal()">Annuler</button><button class="btn btn-primary" onclick="saveNote()">Ajouter</button></div>`;
+}
+function modalAddSpec(){
+  const used = new Set((byId(state.ctx.vehicleId).specs||[]).map(s=>s.label));
+  const chips = SPEC_SUGGESTIONS.filter(s=>!used.has(s)).map(s=>`<div class="chip" onclick="fillSpecLabel('${s.replace(/'/g,"\\'")}')">${s}</div>`).join('');
+  return `<div class="modal-title">DONNÉE CONSTRUCTEUR</div><div class="modal-desc">Capacité, pression, couple de serrage… ce que tu veux garder sous la main.</div>
+    ${chips?`<div class="field"><label class="field-label">Suggestions</label><div class="chips">${chips}</div></div>`:''}
+    <div class="field"><label class="field-label">Nom</label><input id="f-speclabel" placeholder="ex : Capacité huile moteur"></div>
+    <div class="field-row"><div class="field"><label class="field-label">Valeur</label><input id="f-specvalue" placeholder="ex : 4,5"></div>
+      <div class="field"><label class="field-label">Unité <span style="color:var(--t3);">(opt.)</span></label><input id="f-specunit" placeholder="ex : L, bar, Nm"></div></div>
+    <div class="btn-row"><button class="btn btn-secondary" onclick="closeModal()">Annuler</button><button class="btn btn-primary" onclick="saveSpec()">Ajouter</button></div>`;
+}
+function fillSpecLabel(label){ const el=document.getElementById('f-speclabel'); if(el) el.value=label; }
+function modalEditSpec(){
+  const v = byId(state.ctx.vehicleId); const s = (v.specs||[]).find(x=>x.id===state.ctx.specId);
+  if(!s) return `<div class="modal-title">DONNÉE</div><div class="empty">Introuvable.</div><button class="btn btn-secondary" onclick="closeModal()">Fermer</button>`;
+  return `<div class="modal-title">MODIFIER LA DONNÉE</div>
+    <div class="field"><label class="field-label">Nom</label><input id="f-speclabel2" value="${escapeHtml(s.label)}"></div>
+    <div class="field-row"><div class="field"><label class="field-label">Valeur</label><input id="f-specvalue2" value="${escapeHtml(s.value)}"></div>
+      <div class="field"><label class="field-label">Unité <span style="color:var(--t3);">(opt.)</span></label><input id="f-specunit2" value="${escapeHtml(s.unit||'')}"></div></div>
+    <div class="btn-row"><button class="btn btn-secondary" onclick="closeModal()">Annuler</button><button class="btn btn-primary" onclick="saveEditSpec()">Enregistrer</button></div>
+    <button class="btn btn-danger" style="margin-top:10px;" onclick="deleteSpec(${v.id},${s.id})">${trashSvg}Supprimer</button>`;
 }
 function setCompareVehicle(which, id){
   if(which==='a') state.ctx.cmpA = id?Number(id):null; else state.ctx.cmpB = id?Number(id):null;
@@ -1623,8 +1733,12 @@ function openModal(name, ctx){
   if(name==='addDeadline')state.draft.recurrence='none';
   if(name==='editReco'){ const v=byId(ctx.vehicleId); const r=v.recos.find(x=>x.id===ctx.recoId); state.draft.recoType=r.type; }
   if(name==='editDeadline'){ const v=byId(ctx.vehicleId); const d=v.deadlines.find(x=>x.id===ctx.deadlineId); state.draft.recurrence=d.recurrence||'none'; }
-  if(name==='addCheck'){ state.draft.checkType=ctx.checkType||'oil'; state.draft.checkLevel='correct'; state.draft.checkTopped=false; }
-  if(name==='checksAll'){ state.ctx.checkType = ctx.checkType || (CHECK_TYPES[0]||[])[0]; }
+  if(name==='addCheck'){
+    const v=byId(ctx.vehicleId); const items=(v&&v.checkItems)||[];
+    state.draft.checkType = ctx.checkType || (items[0]?items[0].key:'oil'); state.draft.checkLevel='correct'; state.draft.checkTopped=false;
+  }
+  if(name==='checksAll'){ const v=byId(ctx.vehicleId); const items=(v&&v.checkItems)||[]; state.ctx.checkType = ctx.checkType || (items[0]?items[0].key:null); }
+  if(name==='addCheckItem'){ state.draft.itemMode='level'; }
   if(name==='compareVehicles'){ state.ctx.cmpA = vehicles[0] ? vehicles[0].id : null; state.ctx.cmpB = vehicles[1] ? vehicles[1].id : null; }
   renderModal();
 }
@@ -1679,6 +1793,8 @@ function saveVehicle(){
     fuel:val('f-fuel')||'Essence', purchasePrice:price, estValue: price?Math.round(price*0.85):0,
     status:'owned', salePrice:null, tags:parseTags('f-tags'),
     recos:[], history:[], deadlines:[], fuelLogs:[], usageLog:[{id:++nextId, date:todayISO(), value:usage}], notes:[], checks:[],
+    checkItems: BUILTIN_CHECK_ITEMS.map(it=>({key:it.key, label:it.label, mode:it.mode, custom:false, recurrenceMonths:null})),
+    specs:[],
   });
   closeModal(); state.tab='garage'; save(); render(); toast('Véhicule ajouté');
 }
@@ -1862,6 +1978,33 @@ function deleteCheck(vid, checkId){
     toast('Vérification supprimée');
   });
 }
+function saveCheckItem(){
+  const v = byId(state.ctx.vehicleId);
+  const label = val('f-itemlabel').trim();
+  if(!label){ toast('Donne un nom à cet élément.'); return; }
+  const mode = state.draft.itemMode==='pressure' ? 'pressure' : 'level';
+  const recRaw = val('f-itemrec'); const rec = recRaw==='' ? null : Math.max(0, parseInt(recRaw,10)||0) || null;
+  v.checkItems = v.checkItems || [];
+  const key = 'custom_'+(++nextId);
+  v.checkItems.push({key, label, mode, custom:true, recurrenceMonths:rec});
+  closeModal(); save(); render(); toast('Élément ajouté');
+}
+function saveCheckItemEdit(){
+  const v = byId(state.ctx.vehicleId);
+  const item = (v.checkItems||[]).find(it=>it.key===state.ctx.checkType);
+  if(!item) return;
+  if(item.custom){ const label=val('f-itemlabel2').trim(); if(label) item.label=label; }
+  const recRaw = val('f-itemrec2'); item.recurrenceMonths = recRaw==='' ? null : (Math.max(0, parseInt(recRaw,10)||0) || null);
+  closeModal(); save(); render(); toast('Élément mis à jour');
+}
+function deleteCheckItem(vid, key){
+  const v = byId(vid);
+  confirmDialog('Supprimer cet élément', 'Cet élément et son historique de vérifications seront supprimés.', 'Supprimer', ()=>{
+    v.checkItems = (v.checkItems||[]).filter(it=>it.key!==key);
+    v.checks = (v.checks||[]).filter(c=>c.type!==key);
+    save(); closeModal(); render(); toast('Élément supprimé');
+  });
+}
 
 /* notes libres */
 function saveNote(){
@@ -1877,6 +2020,29 @@ function deleteNote(vid, noteId){
   confirmDialog('Supprimer la note', 'Cette note sera définitivement supprimée.', 'Supprimer', ()=>{
     v.notes = (v.notes||[]).filter(n=>n.id!==noteId);
     save(); render(); toast('Note supprimée');
+  });
+}
+function saveSpec(){
+  const v = byId(state.ctx.vehicleId);
+  const label = val('f-speclabel').trim(); const value = val('f-specvalue').trim(); const unit = val('f-specunit').trim();
+  if(!label || !value){ toast('Renseigne au moins le nom et la valeur.'); return; }
+  v.specs = v.specs || [];
+  v.specs.push({id:++nextId, label, value, unit});
+  closeModal(); save(); render(); toast('Donnée ajoutée');
+}
+function saveEditSpec(){
+  const v = byId(state.ctx.vehicleId); const s = (v.specs||[]).find(x=>x.id===state.ctx.specId);
+  if(!s) return;
+  const label = val('f-speclabel2').trim(); const value = val('f-specvalue2').trim(); const unit = val('f-specunit2').trim();
+  if(!label || !value){ toast('Renseigne au moins le nom et la valeur.'); return; }
+  s.label=label; s.value=value; s.unit=unit;
+  closeModal(); save(); render(); toast('Donnée modifiée');
+}
+function deleteSpec(vid, specId){
+  const v = byId(vid);
+  confirmDialog('Supprimer cette donnée', 'Cette information sera définitivement supprimée.', 'Supprimer', ()=>{
+    v.specs = (v.specs||[]).filter(s=>s.id!==specId);
+    save(); closeModal(); render(); toast('Donnée supprimée');
   });
 }
 
