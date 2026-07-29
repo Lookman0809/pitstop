@@ -26,6 +26,16 @@
     --f-display:'Barlow Condensed',sans-serif;--f-body:'DM Sans',sans-serif;--f-data:'JetBrains Mono',monospace;
     --r-sm:8px;--r-md:12px;--r-lg:16px;
   }
+  body[data-theme="light"]{
+    --bg-0:#F5F6F8;--bg-1:#FFFFFF;--bg-2:#FFFFFF;--bg-3:#EEF0F3;--bg-4:#E6E9ED;--bg-5:#D9DDE3;
+    --t1:#14171C;--t2:#565E6B;--t3:#8A93A1;
+    --b1:rgba(0,0,0,0.08);--b2:rgba(0,0,0,0.13);--b3:rgba(0,0,0,0.20);
+  }
+  body[data-density="compact"] .view{padding-bottom:14px;}
+  body[data-density="compact"] .row{padding:9px 10px;}
+  body[data-density="compact"] .stat{padding:11px;}
+  body[data-density="compact"] .sec-title{margin:14px 0 8px;}
+  body[data-density="compact"] .card{padding:12px;}
   *,*::before,*::after{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent;}
   body{background:#000;font-family:var(--f-body);color:var(--t1);display:flex;justify-content:center;height:100vh;height:100dvh;overflow:hidden;}
   .app{width:100%;background:var(--bg-0);height:100vh;height:100dvh;display:flex;flex-direction:column;position:relative;overflow:hidden;}
@@ -94,6 +104,8 @@
   .garage-search{width:100%;background:var(--bg-2);border:1px solid var(--b2);border-radius:var(--r-md);padding:11px 13px;color:var(--t1);font-family:var(--f-body);font-size:13px;outline:none;}
   .garage-search:focus{border-color:var(--accent);}
   .garage-search::placeholder{color:var(--t3);}
+  .help-icon{display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;border-radius:50%;border:1px solid var(--b2);color:var(--t3);font-size:10px;font-weight:700;cursor:pointer;vertical-align:middle;margin-left:4px;}
+  .help-icon:hover{color:var(--t1);border-color:var(--b3);}
   .cmp-table{margin-top:14px;border:1px solid var(--b1);border-radius:var(--r-md);overflow:hidden;}
   .cmp-row{display:grid;grid-template-columns:1fr auto 1fr;gap:8px;align-items:center;padding:10px 12px;border-bottom:1px solid var(--b1);}
   .cmp-row:last-child{border-bottom:none;}
@@ -256,6 +268,22 @@
 <script>
 /* ════════════ CATEGORIES ════════════ */
 const CAT = { voiture:'Voiture', moto:'Moto', cyclomoteur:'Cyclomoteur', autre:'Autre' };
+const DEFAULT_SETTINGS = { name:'', warnKm:1500, warnHours:10, warnDays:30, warnConsPct:25,
+  theme:'dark', accent:'orange', defaultTab:'home', defaultGarageSort:'alert', density:'comfortable', dateFormat:'fr', currency:'EUR' };
+const ACCENT_PRESETS = { orange:'#F0521A', bleu:'#3B82F6', vert:'#22C55E', violet:'#A78BFA', rouge:'#EF4444' };
+const ACCENT_LABEL = { orange:'Orange', bleu:'Bleu', vert:'Vert', violet:'Violet', rouge:'Rouge' };
+function accentHex(){ return ACCENT_PRESETS[(settings&&settings.accent)] || ACCENT_PRESETS.orange; }
+function applyTheme(){
+  if(typeof document==='undefined' || !document.documentElement || !document.documentElement.style) return;
+  const hex = accentHex();
+  document.documentElement.style.setProperty('--accent', hex);
+  const rgb = { orange:'240,82,26', bleu:'59,130,246', vert:'34,197,94', violet:'167,139,250', rouge:'239,68,68' }[(settings&&settings.accent)] || '240,82,26';
+  document.documentElement.style.setProperty('--accent-dim', `rgba(${rgb},0.13)`);
+  if(document.body && document.body.setAttribute){
+    document.body.setAttribute('data-theme', (settings&&settings.theme)==='light' ? 'light' : 'dark');
+    document.body.setAttribute('data-density', (settings&&settings.density)==='compact' ? 'compact' : 'comfortable');
+  }
+}
 const CATMAP = { voiture:'voiture', moto:'moto', motocross:'moto', cyclomoteur:'cyclomoteur', quad:'autre', kart:'autre', autre:'autre' };
 const catLabel = v => CAT[v.category] || 'Autre';
 
@@ -278,7 +306,7 @@ function measureFieldLabel(item){ return item.mode==='pressure' ? item.label : '
 /* ════════════ DEFAULT DATA ════════════ */
 function defaultData(){
   return {
-    settings:{ name:'', warnKm:1500, warnHours:10, warnDays:30, warnConsPct:25 },
+    settings: Object.assign({}, DEFAULT_SETTINGS),
     nextId:1,
     vehicles:[],
   };
@@ -292,6 +320,144 @@ let nextId = 600;
 let onboarded = false;
 let dataUpdatedAt = 0;
 let sync = { repo:'', token:'', enabled:false, lastSync:0, lastError:'' };
+let notif = { enabled:false, publicKey:'', privateKey:'', subscription:null, lastError:'' };
+
+const NOTIF_WORKFLOW_YML = `name: PitStop Manager - notifications
+"on":
+  schedule:
+    - cron: '0 7 * * *'   # tous les jours à 7h UTC — modifie l'heure si besoin
+  workflow_dispatch: {}     # permet aussi de lancer manuellement depuis l'onglet Actions
+
+permissions:
+  contents: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm install web-push
+      - run: node notify-check.js
+        env:
+          VAPID_PUBLIC_KEY: \${{ secrets.VAPID_PUBLIC_KEY }}
+          VAPID_PRIVATE_KEY: \${{ secrets.VAPID_PRIVATE_KEY }}
+      - name: Enregistrer l'état des alertes déjà notifiées
+        run: |
+          git config user.name "pitstop-bot"
+          git config user.email "pitstop-bot@users.noreply.github.com"
+          git add notif-state.json
+          git diff --quiet --cached || git commit -m "Mise à jour de l'état des notifications"
+          git push
+`;
+
+const NOTIF_CHECK_SCRIPT = `/* PitStop Manager — vérification quotidienne des échéances et envoi de notifications.
+   Tourne dans GitHub Actions (voir notify.yml). Ne modifie jamais backup.json,
+   seulement notif-state.json (mémoire des alertes déjà notifiées, pour ne pas
+   répéter la même notification chaque jour). */
+const fs = require('fs');
+const path = require('path');
+const webpush = require('web-push');
+
+const BACKUP_FILE = path.join(__dirname, 'backup.json');
+const STATE_FILE = path.join(__dirname, 'notif-state.json');
+
+function readJson(file, fallback) {
+  try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch (e) { return fallback; }
+}
+
+const backup = readJson(BACKUP_FILE, null);
+if (!backup) { console.log('Pas de backup.json trouvé — rien à faire.'); process.exit(0); }
+if (!backup.notifications || !backup.notifications.subscription) {
+  console.log('Aucun appareil inscrit aux notifications — rien à faire.');
+  process.exit(0);
+}
+
+const settings = Object.assign({ warnKm: 1500, warnHours: 10, warnDays: 30 }, backup.settings || {});
+const vehicles = backup.vehicles || [];
+const state = readJson(STATE_FILE, {});
+const today = new Date();
+const daysUntil = (iso) => Math.round((new Date(iso) - today) / 86400000);
+const addMonths = (iso, m) => { const d = new Date(iso); d.setMonth(d.getMonth() + Number(m)); return d.toISOString().slice(0,10); };
+const warnThreshold = (unit) => unit === 'h' ? settings.warnHours : settings.warnKm;
+
+function statusOf(remOrDays, threshold) {
+  if (remOrDays < 0) return 'danger';
+  if (remOrDays < threshold) return 'warn';
+  return 'ok';
+}
+
+const alerts = []; // { key, vehicle, name, status }
+
+vehicles.forEach((v) => {
+  if (v.status === 'sold') return;
+  const unit = v.unit === 'h' ? 'h' : 'km';
+
+  (v.recos || []).forEach((r) => {
+    let s = 'ok';
+    if (r.interval && r.lastDone != null) {
+      const rem = (r.lastDone + r.interval) - v.usage;
+      s = worse(s, statusOf(rem, warnThreshold(unit)));
+    }
+    if (r.intervalMonths && r.lastDoneDate) {
+      const days = daysUntil(addMonths(r.lastDoneDate, r.intervalMonths));
+      s = worse(s, statusOf(days, settings.warnDays));
+    }
+    alerts.push({ key: \`\${v.id}:reco:\${r.id}\`, vehicle: v, name: r.name, status: s });
+  });
+
+  (v.deadlines || []).forEach((d) => {
+    const days = daysUntil(d.date);
+    const s = statusOf(days, settings.warnDays);
+    alerts.push({ key: \`\${v.id}:deadline:\${d.id}\`, vehicle: v, name: d.name, status: s });
+  });
+
+  (v.checkItems || []).forEach((it) => {
+    if (!it.recurrenceMonths) return;
+    const list = (v.checks || []).filter((c) => c.type === it.key).sort((a, b) => new Date(b.date) - new Date(a.date));
+    if (!list.length) return;
+    const days = daysUntil(addMonths(list[0].date, it.recurrenceMonths));
+    const s = statusOf(days, settings.warnDays);
+    alerts.push({ key: \`\${v.id}:check:\${it.key}\`, vehicle: v, name: it.label, status: s });
+  });
+});
+
+function worse(a, b) {
+  const rank = { ok: 0, warn: 1, danger: 2 };
+  return rank[b] > rank[a] ? b : a;
+}
+
+/* Ne notifie que les alertes NOUVELLEMENT en warn/danger depuis la dernière exécution */
+const toNotify = alerts.filter((a) => {
+  const prev = state[a.key] || 'ok';
+  const isAlert = a.status === 'warn' || a.status === 'danger';
+  const wasAlert = prev === 'warn' || prev === 'danger';
+  return isAlert && (!wasAlert || prev !== a.status);
+});
+
+/* Met à jour l'état pour la prochaine exécution */
+const newState = {};
+alerts.forEach((a) => { newState[a.key] = a.status; });
+fs.writeFileSync(STATE_FILE, JSON.stringify(newState, null, 2));
+
+if (!toNotify.length) { console.log('Aucune nouvelle alerte à notifier.'); process.exit(0); }
+
+webpush.setVapidDetails(
+  'mailto:pitstop@example.com',
+  process.env.VAPID_PUBLIC_KEY,
+  process.env.VAPID_PRIVATE_KEY
+);
+
+const sub = backup.notifications.subscription;
+const title = toNotify.length === 1 ? 'PitStop Manager' : \`PitStop Manager — \${toNotify.length} alertes\`;
+const body = toNotify.slice(0, 5).map((a) => \`\${a.vehicle.brand || a.vehicle.name || 'Véhicule'} : \${a.name} (\${a.status === 'danger' ? 'en retard' : 'bientôt'})\`).join('\\n');
+
+webpush.sendNotification(sub, JSON.stringify({ title, body, url: './pitstop-manager-app.html' }))
+  .then(() => console.log('Notification envoyée : ' + toNotify.length + ' alerte(s).'))
+  .catch((err) => { console.error('Échec envoi notification :', err.message); process.exit(1); });
+`;
 
 function migrate(){
   vehicles.forEach(v=>{
@@ -302,6 +468,9 @@ function migrate(){
     v.notes = v.notes || [];
     v.checks = v.checks || [];
     v.specs = v.specs || [];
+    if(v.vin===undefined || v.vin===null) v.vin = '';
+    if(v.owner!=='me' && v.owner!=='other') v.owner = 'me';
+    if(v.ownerName===undefined || v.ownerName===null) v.ownerName = '';
     if(!v.usageLog.length) v.usageLog.push({id:++nextId, date:todayISO(), value:v.usage||0});
     v.recos.forEach(r=>{ if(r.intervalMonths===undefined) r.intervalMonths=null; if(r.interval===undefined) r.interval=null; });
     v.history.forEach(h=>{ if(h.cost==null) h.cost=0; });
@@ -322,11 +491,12 @@ function load(){
     if(raw){
       const d = JSON.parse(raw);
       vehicles = d.vehicles || [];
-      settings = Object.assign({name:'',warnKm:1500,warnHours:10,warnDays:30,warnConsPct:25}, d.settings||{});
+      settings = Object.assign({}, DEFAULT_SETTINGS, d.settings||{});
       nextId = d.nextId || 600;
       onboarded = !!d.onboarded;
       dataUpdatedAt = d.dataUpdatedAt || 0;
       sync = Object.assign({repo:'', token:'', enabled:false, lastSync:0, lastError:''}, d.sync||{});
+      notif = Object.assign({enabled:false, publicKey:'', privateKey:'', subscription:null, lastError:''}, d.notif||{});
       migrate(); return;
     }
   }catch(e){ console.warn('Lecture stockage impossible', e); }
@@ -335,7 +505,7 @@ function load(){
   save();
 }
 function persist(){
-  try{ localStorage.setItem(STORE_KEY, JSON.stringify({vehicles, settings, nextId, onboarded, dataUpdatedAt, sync})); }
+  try{ localStorage.setItem(STORE_KEY, JSON.stringify({vehicles, settings, nextId, onboarded, dataUpdatedAt, sync, notif})); }
   catch(e){ console.warn('Sauvegarde impossible', e); }
 }
 function save(){
@@ -354,7 +524,7 @@ function resetData(){
 }
 
 /* ════════════ STATE ════════════ */
-let state = { tab:'home', vehicleId:null, modal:null, ctx:{}, draft:{}, onbSlide:0, onbSettings:null, onbDir:'fwd', garageSearch:'', garageSort:'alert', pageAnim:false };
+let state = { tab:'home', vehicleId:null, modal:null, ctx:{}, draft:{}, onbSlide:0, onbSettings:null, onbDir:'fwd', garageSearch:'', garageSort:'alert', garageOwner:'me', pageAnim:false, pendingShortcut:null, searchQuery:'' };
 let _confirmCb = null;
 
 /* ════════════ HELPERS ════════════ */
@@ -364,9 +534,20 @@ const TYPE_COLOR = { oil:'#F0521A', brake:'#EF4444', tire:'#60A5FA', belt:'#A78B
 const TYPE_LABEL = { oil:'Vidange', brake:'Freins', tire:'Pneus', belt:'Courroie', filter:'Filtre', other:'Autre', maint:'Entretien', fuel:'Carburant' };
 const today = () => new Date();
 const fmt = n => Math.round(n).toLocaleString('fr-FR');
-const fmtPrice = n => Math.round(n).toLocaleString('fr-FR') + ' €';
+const CURRENCY_SYMBOL = { EUR:'€', USD:'$', GBP:'£', CHF:'CHF' };
+function fmtPrice(n){
+  const cur = (settings && settings.currency) || 'EUR';
+  const sym = CURRENCY_SYMBOL[cur] || '€';
+  const num = Math.round(n).toLocaleString('fr-FR');
+  return (cur==='USD'||cur==='GBP') ? `${sym}${num}` : `${num} ${sym}`;
+}
 const byId = id => vehicles.find(v => v.id === id);
-function fmtDate(s){ return new Date(s).toLocaleDateString('fr-FR',{day:'2-digit',month:'2-digit',year:'numeric'}); }
+function fmtDate(s){
+  const d = new Date(s); const df = (settings && settings.dateFormat) || 'fr';
+  if(df==='iso') return d.toLocaleDateString('sv-SE',{day:'2-digit',month:'2-digit',year:'numeric'});
+  if(df==='us') return d.toLocaleDateString('en-US',{day:'2-digit',month:'2-digit',year:'numeric'});
+  return d.toLocaleDateString('fr-FR',{day:'2-digit',month:'2-digit',year:'numeric'});
+}
 function daysUntil(s){ return Math.round((new Date(s) - today())/86400000); }
 function unitL(v){ return v.unit==='h' ? 'h' : 'km'; }
 function unitName(v){ return v.unit==='h' ? 'Heures' : 'Km'; }
@@ -506,9 +687,99 @@ function fillAnomaly(f, v){
   if(dev>=thr) return 1; if(dev<=-thr) return -1; return 0;
 }
 function latestFill(v){ if(!v.fuelLogs.length) return null; return [...v.fuelLogs].sort((a,b)=>new Date(b.date)-new Date(a.date))[0]; }
+
+/* ── COHÉRENCE DES DONNÉES ── */
+function scanConsistency(){
+  const issues = [];
+  const add = (v, msg) => issues.push({veh:v, message:msg});
+  vehicles.forEach(v=>{
+    /* compteur qui recule (hors correction déjà attendue, on signale simplement pour vérification) */
+    const log = [...(v.usageLog||[])].sort((a,b)=> new Date(a.date)-new Date(b.date));
+    for(let i=1;i<log.length;i++){
+      if(log[i].value < log[i-1].value){
+        add(v, `Le compteur passe de ${fmt(log[i-1].value)} à ${fmt(log[i].value)} ${unitL(v)} entre le ${fmtDate(log[i-1].date)} et le ${fmtDate(log[i].date)}.`);
+      }
+    }
+    /* vérification en retard depuis longtemps */
+    (v.checkItems||[]).forEach(it=>{
+      const st = checkStatus(it, v);
+      if(st && st.s==='danger' && st.days!=null && st.days < -60){
+        add(v, `« ${it.label} » n'a pas été vérifié depuis longtemps (en retard de ${-st.days} j).`);
+      }
+    });
+    /* dépenses en double (même date, même coût, même intitulé) */
+    const seen = {};
+    v.history.forEach(h=>{
+      if(!h.cost) return;
+      const key = h.date+'|'+h.cost+'|'+h.name.toLowerCase();
+      if(seen[key]) add(v, `Deux entretiens « ${h.name} » à ${fmtPrice(h.cost)} enregistrés le même jour (${fmtDate(h.date)}) — vérifie qu'il ne s'agit pas d'un doublon.`);
+      seen[key] = true;
+    });
+    const seenFuel = {};
+    v.fuelLogs.forEach(f=>{
+      const key = f.date+'|'+f.cost+'|'+f.liters;
+      if(seenFuel[key]) add(v, `Deux pleins identiques enregistrés le même jour (${fmtDate(f.date)}) — vérifie qu'il ne s'agit pas d'un doublon.`);
+      seenFuel[key] = true;
+    });
+    /* rien n'est suivi sur ce véhicule */
+    const hasRecurrence = (v.checkItems||[]).some(it=>it.recurrenceMonths);
+    if(v.status!=='sold' && v.recos.length===0 && !hasRecurrence){
+      add(v, `Aucune préconisation ni rappel de vérification configuré — rien n'est suivi sur ce véhicule.`);
+    }
+    /* anomalie de consommation jamais résolue */
+    if((v.owner||'me')==='me'){
+      const lf = latestFill(v);
+      if(lf && fillAnomaly(lf,v)>0){
+        add(v, `Le dernier plein (${fmtDate(lf.date)}) est en surconsommation par rapport à ta moyenne, sans plein plus récent pour confirmer que c'est résolu.`);
+      }
+    }
+  });
+  return issues;
+}
+function modalConsistency(){
+  const issues = scanConsistency();
+  const rows = issues.map(i=>`<div class="row tap" onclick="openSearchResult(${i.veh.id})">
+    <div class="row-icon" style="background:var(--warn-dim);"><svg width="18" height="18" viewBox="0 0 16 16" fill="none"><path d="M8 1.5l6.5 12h-13L8 1.5z" stroke="var(--warn)" stroke-width="1.3" stroke-linejoin="round"/><line x1="8" y1="6" x2="8" y2="9.5" stroke="var(--warn)" stroke-width="1.4" stroke-linecap="round"/><circle cx="8" cy="11.5" r="0.8" fill="var(--warn)"/></svg></div>
+    <div class="row-body"><div class="row-name">${vehTitle(i.veh)}</div><div class="row-sub" style="text-transform:none;letter-spacing:0;font-size:11.5px;line-height:1.4;">${escapeHtml(i.message)}</div></div>
+  </div>`).join('');
+  return `<div class="modal-title">COHÉRENCE DES DONNÉES</div><div class="modal-desc">${issues.length?`${issues.length} point${issues.length>1?'s':''} à vérifier. Rien n'est corrigé automatiquement.`:'Aucune incohérence détectée.'}</div>
+    ${issues.length?rows:`<div class="empty">Tes données semblent cohérentes.</div>`}
+    <button class="btn btn-secondary" style="margin-top:14px;" onclick="closeModal()">Fermer</button>`;
+}
+function helpSection(title, html){ return `<div class="sec-title" style="margin-top:18px;">${title}</div><div style="font-size:12.5px;color:var(--t2);line-height:1.65;">${html}</div>`; }
+function modalHelp(){
+  const usage = `
+    <p><b style="color:var(--t1);">Garage</b> : ajoute tes véhicules, bascule entre « Mes véhicules » et « Véhicules des autres » en haut de l'écran.</p>
+    <p style="margin-top:8px;"><b style="color:var(--t1);">Fiche véhicule</b> : entretiens, vérifications (niveaux/pression), compteur, fiche technique, notes — tout est accessible depuis la fiche de chaque véhicule.</p>
+    <p style="margin-top:8px;"><b style="color:var(--t1);">Accueil / Échéances</b> : regroupent les alertes à venir, triées par urgence.</p>
+    <p style="margin-top:8px;"><b style="color:var(--t1);">Recherche</b> : l'icône loupe en haut de chaque écran cherche partout (véhicules, notes, entretiens, fiches techniques…).</p>
+    <p style="margin-top:8px;"><b style="color:var(--t1);">Raccourcis</b> : un appui long sur l'icône de l'app installée donne un accès direct à quelques actions (plein, compteur, vérification, échéances).</p>
+  `;
+  const sync_ = `
+    <p>La synchronisation sauvegarde tes données dans un dépôt GitHub <b style="color:var(--t1);">privé</b>, pour les retrouver sur tes autres appareils.</p>
+    <p style="margin-top:8px;">1. Crée un dépôt privé sur GitHub (ex. <code>pitstop-data</code>).</p>
+    <p style="margin-top:4px;">2. Crée un token : GitHub → Settings → Developer settings → Fine-grained tokens → limité à ce seul dépôt, droit <i>Contents: Read and write</i>.</p>
+    <p style="margin-top:4px;">3. Dans Réglages → Synchronisation, renseigne <code>utilisateur/nom-du-dépôt</code> et le token, puis « Activer la synchronisation ».</p>
+    <p style="margin-top:8px;">Ensuite c'est automatique : envoi après chaque modification, récupération à l'ouverture.</p>
+  `;
+  const notifs = `
+    <p>Les notifications reposent sur une tâche planifiée gratuite (GitHub Actions) sur le <b style="color:var(--t1);">même dépôt que ta synchronisation</b> — configure-la d'abord.</p>
+    <p style="margin-top:8px;">1. Dans Réglages → Notifications, clique « Activer les notifications » (accepte la permission demandée par le navigateur).</p>
+    <p style="margin-top:4px;">2. Télécharge les 3 fichiers proposés : les clés secrètes, <code>notify.yml</code> et <code>notify-check.js</code>.</p>
+    <p style="margin-top:4px;">3. Sur GitHub, dans ton dépôt de données → Settings → Secrets and variables → Actions : ajoute <code>VAPID_PUBLIC_KEY</code> et <code>VAPID_PRIVATE_KEY</code> avec les valeurs du fichier téléchargé.</p>
+    <p style="margin-top:4px;">4. Ajoute <code>notify-check.js</code> à la racine du dépôt, et <code>notify.yml</code> dans un dossier <code>.github/workflows/</code> (à créer).</p>
+    <p style="margin-top:4px;">5. Committe ces fichiers. La tâche tourne ensuite chaque jour automatiquement (tu peux aussi la lancer manuellement depuis l'onglet Actions du dépôt).</p>
+    <p style="margin-top:8px;color:var(--t3);">Un seul appareil actif à la fois pour l'instant : réactiver sur un autre appareil remplace l'inscription précédente.</p>
+  `;
+  return `<div class="modal-title">AIDE</div><div class="modal-desc">Utilisation de l'app, synchronisation et notifications.</div>
+    ${helpSection('Utilisation', usage)}
+    ${helpSection('Synchronisation entre appareils', sync_)}
+    ${helpSection('Notifications', notifs)}
+    <button class="btn btn-secondary" style="margin-top:18px;" onclick="closeModal()">Fermer</button>`;
+}
 function expenseYears(){
   const ys = new Set();
-  vehicles.forEach(v=>{
+  vehicles.filter(v=>(v.owner||'me')==='me').forEach(v=>{
     v.history.forEach(h=>{ if(h.cost>0) ys.add(new Date(h.date).getFullYear()); });
     v.fuelLogs.forEach(f=>{ if(f.cost>0) ys.add(new Date(f.date).getFullYear()); });
   });
@@ -517,14 +788,14 @@ function expenseYears(){
 }
 function spendInYear(year){
   let maint=0, fuel=0;
-  vehicles.forEach(v=>{
+  vehicles.filter(v=>(v.owner||'me')==='me').forEach(v=>{
     v.history.forEach(h=>{ if(h.cost>0 && new Date(h.date).getFullYear()===year) maint+=h.cost; });
     v.fuelLogs.forEach(f=>{ if(f.cost>0 && new Date(f.date).getFullYear()===year) fuel+=f.cost; });
   });
   return {maint, fuel};
 }
 function projection12(){
-  const active = vehicles.filter(v=>v.status!=='sold');
+  const active = vehicles.filter(v=>v.status!=='sold' && (v.owner||'me')==='me');
   let eCost=0, minD=null, maxD=null;
   active.forEach(v=>v.fuelLogs.forEach(f=>{ if(f.cost>0){ eCost+=f.cost; const d=new Date(f.date); if(!minD||d<minD)minD=d; if(!maxD||d>maxD)maxD=d; } }));
   let energyYear=0;
@@ -616,17 +887,17 @@ function consChartSVG(v){
   };
   const path = smoothPath(pts);
   const areaPath = n>1 ? `${path} L ${pts[n-1].x.toFixed(1)},${bot} L ${pts[0].x.toFixed(1)},${bot} Z` : '';
-  const dots = pts.map((p,i)=>`<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="${i===n-1?3.6:2.4}" fill="#F0521A"${i===n-1?' stroke="#09090C" stroke-width="1.5"':''}/>`).join('');
+  const dots = pts.map((p,i)=>`<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="${i===n-1?3.6:2.4}" fill="${accentHex()}"${i===n-1?' stroke="#09090C" stroke-width="1.5"':''}/>`).join('');
   const ay = y(avg).toFixed(1);
   const uid = 'cc'+Math.random().toString(36).slice(2,8);
   return `<svg width="100%" height="${H}" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" style="display:block;overflow:visible;">
     <defs><linearGradient id="${uid}" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="#F0521A" stop-opacity="0.28"/><stop offset="100%" stop-color="#F0521A" stop-opacity="0"/>
+      <stop offset="0%" stop-color="${accentHex()}" stop-opacity="0.28"/><stop offset="100%" stop-color="${accentHex()}" stop-opacity="0"/>
     </linearGradient></defs>
     <line x1="${padX}" y1="${ay}" x2="${W-padX}" y2="${ay}" stroke="#596070" stroke-width="1" stroke-dasharray="3 3"/>
     <text x="${W-padX}" y="${(ay-5)}" text-anchor="end" font-family="JetBrains Mono,monospace" font-size="9" fill="#596070">moy ${avg.toFixed(1)}</text>
     ${n>1?`<path d="${areaPath}" fill="url(#${uid})" stroke="none"/>`:''}
-    ${n>1?`<path d="${path}" fill="none" stroke="#F0521A" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`:''}
+    ${n>1?`<path d="${path}" fill="none" stroke="${accentHex()}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`:''}
     ${dots}
     <text x="6" y="${top-2}" font-family="JetBrains Mono,monospace" font-size="9" fill="#596070">${(max-pad).toFixed(1)}</text>
     <text x="6" y="${bot+11}" font-family="JetBrains Mono,monospace" font-size="9" fill="#596070">${(min+pad).toFixed(1)}</text>
@@ -674,19 +945,19 @@ function sparkSVG(entries){
     const isDrop = i>0 && vals[i]<vals[i-1];
     const isLast = i===n-1;
     const r = isLast ? 3.6 : 2.4;
-    const fill = isDrop ? '#EF4444' : (isLast ? '#F0521A' : '#F0521A');
+    const fill = isDrop ? '#EF4444' : accentHex();
     return `<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="${r}" fill="${fill}"${isLast?' stroke="#09090C" stroke-width="1.5"':''}/>`;
   }).join('');
 
   const uid = 'sg'+Math.random().toString(36).slice(2,8);
   return `<svg width="100%" height="${H}" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" style="display:block;overflow:visible;">
     <defs><linearGradient id="${uid}" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="#F0521A" stop-opacity="0.28"/>
-      <stop offset="100%" stop-color="#F0521A" stop-opacity="0"/>
+      <stop offset="0%" stop-color="${accentHex()}" stop-opacity="0.28"/>
+      <stop offset="100%" stop-color="${accentHex()}" stop-opacity="0"/>
     </linearGradient></defs>
     ${grid}
     ${n>1?`<path d="${areaPath}" fill="url(#${uid})" stroke="none"/>`:''}
-    ${n>1?`<path d="${path}" fill="none" stroke="#F0521A" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`:''}
+    ${n>1?`<path d="${path}" fill="none" stroke="${accentHex()}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`:''}
     ${corrections}
     ${dots}
     <text x="${W-4}" y="${top-2}" text-anchor="end" font-family="JetBrains Mono,monospace" font-size="9" fill="#596070">${fmt(Math.round(max-pad))}</text>
@@ -805,6 +1076,7 @@ let _viewAnim = '';
 function isWide(){ return window.innerWidth >= WIDE_BP; }
 
 function render(){
+  applyTheme();
   _lastWide = isWide();
   _viewAnim = state.pageAnim ? ' view-anim' : ''; state.pageAnim = false;
   document.getElementById('shell').innerHTML = _lastWide ? renderWide() : renderNarrow();
@@ -826,6 +1098,9 @@ function navItems(){
 function plusBtn(){
   return `<button class="header-btn" onclick="openModal('addVehicle')" aria-label="Ajouter un véhicule"><svg width="17" height="17" viewBox="0 0 17 17" fill="none"><line x1="8.5" y1="3" x2="8.5" y2="14" stroke="#fff" stroke-width="1.9" stroke-linecap="round"/><line x1="3" y1="8.5" x2="14" y2="8.5" stroke="#fff" stroke-width="1.9" stroke-linecap="round"/></svg></button>`;
 }
+function searchBtn(){
+  return `<button class="header-btn" style="background:var(--bg-4);" onclick="openModal('globalSearch')" aria-label="Rechercher"><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="7" cy="7" r="4.5" stroke="var(--t1)" stroke-width="1.5"/><line x1="10.3" y1="10.3" x2="14" y2="14" stroke="var(--t1)" stroke-width="1.5" stroke-linecap="round"/></svg></button>`;
+}
 
 /* ── NARROW (téléphone + iPad portrait) ── */
 function renderNarrow(){
@@ -844,18 +1119,18 @@ function narrowHeaderHtml(){
   }
   if(state.tab==='home'){
     const greet = settings.name ? `Bonjour ${settings.name}, voici ton parc` : 'Le suivi de ton parc auto';
-    return `<div class="header"><div><div class="header-title"><span>PITSTOP</span> <span style="color:var(--accent);">MANAGER</span></div><div class="header-sub">${greet}</div></div></div>`;
+    return `<div class="header"><div><div class="header-title"><span>PITSTOP</span> <span style="color:var(--accent);">MANAGER</span></div><div class="header-sub">${greet}</div></div>${searchBtn()}</div>`;
   }
   if(state.tab==='garage'){
-    return `<div class="header"><div><div class="header-title">MON GARAGE</div><div class="header-sub">${vehicles.filter(v=>v.status!=='sold').length} véhicule(s) actif(s)</div></div>${plusBtn()}</div>`;
+    return `<div class="header"><div><div class="header-title">MON GARAGE</div><div class="header-sub">${vehicles.filter(v=>v.status!=='sold').length} véhicule(s) actif(s)</div></div><div style="display:flex;gap:8px;">${searchBtn()}${plusBtn()}</div></div>`;
   }
   if(state.tab==='echeances'){
-    return `<div class="header"><div><div class="header-title">ÉCHÉANCES</div><div class="header-sub">Entretiens & contrôles à venir</div></div></div>`;
+    return `<div class="header"><div><div class="header-title">ÉCHÉANCES</div><div class="header-sub">Entretiens & contrôles à venir</div></div>${searchBtn()}</div>`;
   }
   if(state.tab==='finance'){
-    return `<div class="header"><div><div class="header-title">FINANCE</div><div class="header-sub">Dépenses & valeur du parc</div></div></div>`;
+    return `<div class="header"><div><div class="header-title">FINANCE</div><div class="header-sub">Dépenses & valeur du parc</div></div>${searchBtn()}</div>`;
   }
-  return `<div class="header"><div><div class="header-title">RÉGLAGES</div><div class="header-sub">Préférences & données</div></div></div>`;
+  return `<div class="header"><div><div class="header-title">RÉGLAGES</div><div class="header-sub">Préférences & données</div></div>${searchBtn()}</div>`;
 }
 function bottomNavHtml(){
   return `<div class="nav">` + navItems().map(it=>{
@@ -879,7 +1154,7 @@ function renderWide(){
   const hd = headerMeta(t);
   return `<div class="layout-wide">${sidebarHtml()}
     <main class="main">
-      <div class="main-header"><div><div class="header-title">${hd.title}</div><div class="header-sub">${hd.sub}</div></div>${hd.add?plusBtn():''}</div>
+      <div class="main-header"><div><div class="header-title">${hd.title}</div><div class="header-sub">${hd.sub}</div></div><div style="display:flex;gap:8px;">${searchBtn()}${hd.add?plusBtn():''}</div></div>
       ${body}
     </main></div>`;
 }
@@ -890,7 +1165,7 @@ function sidebarHtml(){
     const attr = it.filled ? (active?`fill="${col}"`:`fill="none" stroke="${col}" stroke-width="1.4"`) : `stroke="${col}" stroke-width="1.4" fill="none" stroke-linejoin="round" stroke-linecap="round"`;
     return `<button class="side-item ${active?'active':''}" onclick="switchTab('${it.id}')"><svg width="19" height="19" viewBox="0 0 18 19" ${attr}>${it.svg}</svg><span>${it.label}</span></button>`;
   }).join('');
-  return `<aside class="sidebar"><div class="side-logo"><span>PITSTOP</span> <span style="color:var(--accent);">MANAGER</span></div><nav class="side-nav">${links}</nav><div class="side-foot">v1.5.1 · données locales</div></aside>`;
+  return `<aside class="sidebar"><div class="side-logo"><span>PITSTOP</span> <span style="color:var(--accent);">MANAGER</span></div><nav class="side-nav">${links}</nav><div class="side-foot">v2.0 · données locales <span class="help-icon" onclick="openModal('help')" title="Aide">?</span></div></aside>`;
 }
 function headerMeta(t){
   if(t==='home'){ const greet = settings.name ? `Bonjour ${settings.name}` : 'Ton parc'; return {title:greet, sub:'Vue d\'ensemble de ton parc'}; }
@@ -977,10 +1252,14 @@ function completeOnboarding(){
 
 /* ── HOME ── */
 function viewHome(){
-  const active = vehicles.filter(v=>v.status!=='sold');
-  const forSale = vehicles.filter(v=>v.status==='for_sale');
+  const mine = vehicles.filter(v=>(v.owner||'me')==='me');
+  const others = vehicles.filter(v=>(v.owner||'me')==='other');
+  const active = mine.filter(v=>v.status!=='sold');
+  const forSale = mine.filter(v=>v.status==='for_sale');
   const totalValue = active.reduce((s,v)=>s+(v.estValue||0),0);
-  const alerts = allAlerts();
+  const allA = allAlerts();
+  const alerts = allA.filter(a=>(a.veh.owner||'me')==='me');
+  const otherAlerts = allA.filter(a=>(a.veh.owner||'me')==='other');
   let html = `<div class="stat-grid" style="margin-top:8px;">
     <div class="stat"><div class="stat-icon" style="background:var(--accent-dim);">${icon('tire','var(--accent)')}</div><div class="stat-val">${active.length}</div><div class="stat-label">Véhicules au parc</div></div>
     <div class="stat"><div class="stat-icon" style="background:${alerts.length?'var(--warn-dim)':'var(--ok-dim)'};"><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 1.5l6.5 12h-13L8 1.5z" stroke="${alerts.length?'var(--warn)':'var(--ok)'}" stroke-width="1.3" stroke-linejoin="round"/><line x1="8" y1="6" x2="8" y2="9.5" stroke="${alerts.length?'var(--warn)':'var(--ok)'}" stroke-width="1.4" stroke-linecap="round"/><circle cx="8" cy="11.5" r="0.8" fill="${alerts.length?'var(--warn)':'var(--ok)'}"/></svg></div><div class="stat-val" style="color:${alerts.length?'var(--warn)':'var(--ok)'};">${alerts.length}</div><div class="stat-label">Alertes actives</div></div>
@@ -991,6 +1270,11 @@ function viewHome(){
   if(alerts.length){ html += alerts.slice(0,4).map(a=>alertRow(a)).join(''); }
   else { html += `<div class="empty">Tout ton parc est à jour, aucune alerte.</div>`; }
   if(forSale.length){ html += `<div class="sec-title">En vente</div><div class="card-grid">` + forSale.map(v=>vehicleCard(v)).join('') + `</div>`; }
+  if(others.length){
+    html += `<div class="sec-title" style="margin-top:24px;">Véhicules des autres ${otherAlerts.length?`<span class="sec-link" onclick="switchTab('echeances')">Tout voir</span>`:''}</div>`;
+    if(otherAlerts.length){ html += otherAlerts.slice(0,4).map(a=>alertRow(a)).join(''); }
+    else { html += `<div class="empty">Aucune alerte sur les véhicules des autres.</div>`; }
+  }
   return html;
 }
 function alertRow(a){
@@ -1003,7 +1287,50 @@ function alertRow(a){
 }
 
 /* ── GARAGE ── */
-function vehSearchText(v){ return [v.brand,v.model,v.name,v.plate,(v.tags||[]).join(' '),catLabel(v),v.fuel].filter(Boolean).join(' ').toLowerCase(); }
+function vehSearchText(v){ return [v.brand,v.model,v.name,v.plate,(v.tags||[]).join(' '),catLabel(v),v.fuel,v.ownerName].filter(Boolean).join(' ').toLowerCase(); }
+
+/* ── RECHERCHE GLOBALE ── */
+const SEARCH_TYPE_LABEL = { vehicle:'Véhicule', note:'Note', spec:'Fiche technique', reco:'Préconisation', history:'Entretien', deadline:'Échéance', check:'Vérification' };
+function searchAll(query){
+  const q = (query||'').trim().toLowerCase();
+  if(!q) return [];
+  const out = [];
+  vehicles.forEach(v=>{
+    if(vehSearchText(v).includes(q) || (v.vin||'').toLowerCase().includes(q)){
+      out.push({type:'vehicle', label:vehTitle(v), sub:v.plate||catLabel(v), veh:v});
+    }
+    (v.notes||[]).forEach(n=>{ if(n.text.toLowerCase().includes(q)) out.push({type:'note', label:n.text, sub:`${vehTitle(v)} · ${fmtDate(n.date)}`, veh:v}); });
+    (v.specs||[]).forEach(s=>{ if(s.label.toLowerCase().includes(q) || String(s.value).toLowerCase().includes(q)) out.push({type:'spec', label:`${s.label} : ${s.value}${s.unit?' '+s.unit:''}`, sub:vehTitle(v), veh:v}); });
+    (v.recos||[]).forEach(r=>{ if(r.name.toLowerCase().includes(q)) out.push({type:'reco', label:r.name, sub:vehTitle(v), veh:v}); });
+    (v.history||[]).forEach(h=>{ if(h.name.toLowerCase().includes(q)) out.push({type:'history', label:h.name, sub:`${vehTitle(v)} · ${fmtDate(h.date)}`, veh:v}); });
+    (v.deadlines||[]).forEach(d=>{ if(d.name.toLowerCase().includes(q)) out.push({type:'deadline', label:d.name, sub:vehTitle(v), veh:v}); });
+    (v.checkItems||[]).forEach(it=>{ if(it.label.toLowerCase().includes(q)) out.push({type:'check', label:it.label, sub:vehTitle(v), veh:v}); });
+  });
+  return out.slice(0,60);
+}
+function onGlobalSearchInput(v){
+  state.searchQuery = v;
+  const el = document.getElementById('search-results');
+  if(el) el.innerHTML = globalSearchResultsHTML();
+}
+function globalSearchResultsHTML(){
+  const q = state.searchQuery||'';
+  if(!q.trim()) return `<div class="empty">Cherche un véhicule, une note, une fiche technique, un entretien…</div>`;
+  const results = searchAll(q);
+  if(!results.length) return `<div class="empty">Aucun résultat pour « ${escapeHtml(q)} ».</div>`;
+  return results.map(r=>`<div class="row tap" onclick="openSearchResult(${r.veh.id})">
+    <div class="row-icon" style="background:var(--bg-4);">${icon(r.type==='vehicle'?'tire':r.type==='note'?'other':r.type==='spec'?'other':r.type==='deadline'?'date':r.type==='check'?'drop':'oil','var(--t2)')}</div>
+    <div class="row-body"><div class="row-name">${escapeHtml(r.label)}</div><div class="row-sub">${SEARCH_TYPE_LABEL[r.type]} · ${escapeHtml(r.sub)}</div></div>
+  </div>`).join('');
+}
+function openSearchResult(vehicleId){ closeModal(); openVehicle(vehicleId); }
+function modalGlobalSearch(){
+  const q = escapeHtml(state.searchQuery||'');
+  return `<div class="modal-title">RECHERCHE</div><div class="modal-desc">Sur tout ton parc : véhicules, notes, fiches techniques, entretiens, préconisations, échéances, vérifications.</div>
+    <input id="global-search-input" class="garage-search" placeholder="Rechercher…" value="${q}" oninput="onGlobalSearchInput(this.value)">
+    <div id="search-results" style="margin-top:12px;">${globalSearchResultsHTML()}</div>
+    <button class="btn btn-secondary" style="margin-top:14px;" onclick="closeModal()">Fermer</button>`;
+}
 function filterVehicles(list){ const q=(state.garageSearch||'').trim().toLowerCase(); return q?list.filter(v=>vehSearchText(v).includes(q)):list; }
 function sortVehicles(list){
   const by=state.garageSort||'alert'; const arr=[...list];
@@ -1016,14 +1343,22 @@ function sortVehicles(list){
 function garageControls(){
   const q=escapeHtml(state.garageSearch||'');
   const sorts=[['alert','Alerte'],['name','Nom'],['value','Valeur'],['tag','Étiquette']];
+  const owner = state.garageOwner||'me';
   return `<div class="garage-tools">
+    <div class="chips" style="margin-bottom:10px;">
+      <div class="chip ${owner==='me'?'active':''}" onclick="setGarageOwner('me')">Mes véhicules</div>
+      <div class="chip ${owner==='other'?'active':''}" onclick="setGarageOwner('other')">Véhicules des autres</div>
+    </div>
     <input id="garage-search" class="garage-search" placeholder="Rechercher (marque, modèle, plaque, étiquette…)" value="${q}" oninput="onGarageSearch(this.value)">
     <div class="chips" style="margin-top:8px;">${sorts.map(s=>`<div class="chip ${(state.garageSort||'alert')===s[0]?'active':''}" onclick="setGarageSort('${s[0]}')">${s[1]}</div>`).join('')}</div>
   </div>`;
 }
+function setGarageOwner(o){ state.garageOwner=o; state.vehicleId=null; render(); }
 function garageListHTML(grid){
   const wrap = items => grid ? `<div class="card-grid">${items}</div>` : items;
-  const all = filterVehicles(vehicles);
+  const owner = state.garageOwner||'me';
+  const base = vehicles.filter(v => (v.owner||'me')===owner);
+  const all = filterVehicles(base);
   if((state.garageSort||'alert')==='tag'){
     const groups={}; const noTag=[];
     all.forEach(v=>{ if(v.tags&&v.tags.length) v.tags.forEach(t=>{ (groups[t]=groups[t]||[]).push(v); }); else noTag.push(v); });
@@ -1033,8 +1368,13 @@ function garageListHTML(grid){
       html += `<div class="sec-title">${escapeHtml(t)}</div>` + wrap(sorted.map(v=>vehicleCard(v)).join(''));
     });
     if(noTag.length){ const sorted=[...noTag].sort((a,b)=>vehTitle(a).localeCompare(vehTitle(b))); html += `<div class="sec-title">Sans étiquette</div>` + wrap(sorted.map(v=>vehicleCard(v)).join('')); }
-    if(!html){ const q=(state.garageSearch||'').trim(); html = `<div class="empty">${q?'Aucun véhicule ne correspond.':'Aucun véhicule. Ajoute ton premier véhicule.'}</div>`; }
+    if(!html){ const q=(state.garageSearch||'').trim(); html = `<div class="empty">${q?'Aucun véhicule ne correspond.':(owner==='me'?'Aucun véhicule. Ajoute ton premier véhicule.':'Aucun véhicule des autres pour le moment.')}</div>`; }
     return html;
+  }
+  if(owner==='other'){
+    const sorted = sortVehicles(all);
+    if(!sorted.length){ const q=(state.garageSearch||'').trim(); return `<div class="empty">${q?'Aucun véhicule ne correspond à la recherche.':'Aucun véhicule des autres pour le moment.'}</div>`; }
+    return wrap(sorted.map(v=>vehicleCard(v)).join(''));
   }
   const owned=sortVehicles(all.filter(v=>v.status==='owned'));
   const sale =sortVehicles(all.filter(v=>v.status==='for_sale'));
@@ -1056,21 +1396,23 @@ function viewGarage(){
 }
 function vehicleCard(v){
   const st = vehicleStatus(v);
+  const isMine = (v.owner||'me')==='me';
   const badge = st.s==='sale' ? `<span class="badge sale"><span class="dot"></span>En vente</span>`
               : st.s==='sold' ? `<span class="badge sold">Vendu</span>`
               : `<span class="badge ${st.s}"><span class="dot"></span>${st.label}</span>`;
   const tag = v.plate ? `<div class="veh-plate">${v.plate.replaceAll('-','·')}</div>` : `<div class="veh-cat">${catLabel(v)}</div>`;
   const sel = state.vehicleId===v.id ? ' selected' : '';
   const tags = (v.tags&&v.tags.length) ? `<div class="veh-tags">${v.tags.map(t=>`<span class="tag-pill">${escapeHtml(t)}</span>`).join('')}</div>` : '';
+  const ownerSub = (!isMine && v.ownerName) ? `<div class="veh-model">Propriétaire : ${escapeHtml(v.ownerName)}</div>` : '';
   return `<div class="veh s-${st.s}${sel}">
     <div class="veh-head" onclick="openVehicle(${v.id})">
-      <div><div class="veh-brand">${vehTitle(v)}</div><div class="veh-model">${vehSub(v)}</div>${tags}</div>
+      <div><div class="veh-brand">${vehTitle(v)}</div><div class="veh-model">${vehSub(v)}</div>${ownerSub}${tags}</div>
       <div class="veh-right">${tag}<button class="icon-del" onclick="event.stopPropagation();confirmDeleteVehicle(${v.id})" aria-label="Supprimer">${trashSvg}</button></div>
     </div>
     <div class="veh-stats" onclick="openVehicle(${v.id})">
       <div class="veh-stat"><div class="veh-stat-l">${unitName(v)}</div><div class="veh-stat-v">${fmt(v.usage)}</div></div>
       <div class="veh-stat"><div class="veh-stat-l">Carburant</div><div class="veh-stat-v">${v.fuel}</div></div>
-      <div class="veh-stat"><div class="veh-stat-l">Statut</div><div style="margin-top:1px;">${badge}</div></div>
+      <div class="veh-stat"><div class="veh-stat-l">Statut</div><div style="margin-top:1px;">${isMine?badge:`<span class="badge ${st.s==='ok'?'ok':st.s}"><span class="dot"></span>${st.label}</span>`}</div></div>
     </div>
   </div>`;
 }
@@ -1078,20 +1420,24 @@ function vehicleCard(v){
 /* ── DETAIL ── */
 function viewDetail(id){
   const v = byId(id); if(!v) return '';
+  const isMine = (v.owner||'me')==='me';
   const st = vehicleStatus(v);
   const bc = v.status==='sold' ? 'var(--t3)' : (v.status==='for_sale' ? 'var(--accent)' : (SC[st.s]||'var(--accent)'));
   let html = `<div class="detail-hero" style="border-left-color:${bc};">
     <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:16px;">
       <div><div class="detail-brand">${vehTitle(v)}</div><div class="detail-model">${vehSub(v)}</div></div>
-      ${v.status==='for_sale'?`<span class="badge sale"><span class="dot"></span>En vente</span>`:v.status==='sold'?`<span class="badge sold">Vendu</span>`:`<span class="badge ${st.s}"><span class="dot"></span>${st.label}</span>`}
+      ${!isMine?`<span class="badge info"><span class="dot"></span>Véhicule des autres</span>`:v.status==='for_sale'?`<span class="badge sale"><span class="dot"></span>En vente</span>`:v.status==='sold'?`<span class="badge sold">Vendu</span>`:`<span class="badge ${st.s}"><span class="dot"></span>${st.label}</span>`}
     </div>
     <div class="detail-grid">
       ${v.plate?`<div class="detail-cell"><div class="detail-cell-l">Immatriculation</div><div class="detail-cell-v">${v.plate}</div></div>`:`<div class="detail-cell"><div class="detail-cell-l">Type</div><div class="detail-cell-v">${catLabel(v)}</div></div>`}
       <div class="detail-cell"><div class="detail-cell-l">${unitName(v)}</div><div class="detail-cell-v">${fmt(v.usage)} ${unitL(v)}</div></div>
       <div class="detail-cell"><div class="detail-cell-l">Carburant</div><div class="detail-cell-v">${v.fuel}</div></div>
-      <div class="detail-cell"><div class="detail-cell-l">Prix d'achat</div><div class="detail-cell-v">${v.purchasePrice?fmtPrice(v.purchasePrice):'—'}</div></div>
+      ${isMine?`<div class="detail-cell"><div class="detail-cell-l">Prix d'achat</div><div class="detail-cell-v">${v.purchasePrice?fmtPrice(v.purchasePrice):'—'}</div></div>
       <div class="detail-cell"><div class="detail-cell-l">Valeur estimée</div><div class="detail-cell-v">${v.estValue?fmtPrice(v.estValue):'—'}</div></div>
-      <div class="detail-cell"><div class="detail-cell-l">${v.status==='for_sale'?'Prix de vente':'Année'}</div><div class="detail-cell-v" style="${v.status==='for_sale'?'color:var(--accent);':''}">${v.status==='for_sale'?fmtPrice(v.salePrice):(v.year||'—')}</div></div>
+      <div class="detail-cell"><div class="detail-cell-l">${v.status==='for_sale'?'Prix de vente':'Année'}</div><div class="detail-cell-v" style="${v.status==='for_sale'?'color:var(--accent);':''}">${v.status==='for_sale'?fmtPrice(v.salePrice):(v.year||'—')}</div></div>`
+      :`<div class="detail-cell"><div class="detail-cell-l">Année</div><div class="detail-cell-v">${v.year||'—'}</div></div>
+      <div class="detail-cell"><div class="detail-cell-l">Propriétaire</div><div class="detail-cell-v">${escapeHtml(v.ownerName||'Non précisé')}</div></div>`}
+      ${v.vin?`<div class="detail-cell"><div class="detail-cell-l">VIN</div><div class="detail-cell-v" style="font-family:var(--f-data);font-size:12px;letter-spacing:0.02em;">${escapeHtml(v.vin)}</div></div>`:''}
     </div>
   </div>`;
 
@@ -1100,6 +1446,7 @@ function viewDetail(id){
   html += specsSection(v);
   html += addBtn('Ajouter une donnée', `openModal('addSpec',{vehicleId:${v.id}})`);
 
+  if(isMine){
   /* consommation / énergie */
   const avg = avgCons(v);
   const elec = isElectric(v); const eu = energyUnit(v);
@@ -1118,6 +1465,7 @@ function viewDetail(id){
     html += `<div style="text-align:right;margin-top:8px;"><span class="sec-link" onclick="openModal('fuelAll',{vehicleId:${v.id}})">${v.fuelLogs.length>3?`Voir ${elec?'toutes les recharges':'tous les pleins'} (${v.fuelLogs.length})`:'Voir le graphique'} →</span></div>`;
   } else { html += `<div class="empty">Aucun${elec?'e recharge enregistrée':' plein enregistré'}. Ajoute ${elec?'tes recharges':'tes pleins'} pour suivre la consommation.</div>`; }
   html += addBtn(elec?'Ajouter une recharge':'Ajouter un plein', `openModal('addFuel',{vehicleId:${v.id}})`);
+  }
 
   /* compteur (historique) */
   html += `<div class="sec-title">Compteur</div>`;
@@ -1130,9 +1478,11 @@ function viewDetail(id){
   html += addBtn('Faire une vérification', `openModal('addCheck',{vehicleId:${v.id}})`);
   html += `<button class="btn btn-secondary" style="margin-top:10px;" onclick="openModal('addCheckItem',{vehicleId:${v.id}})">Ajouter un élément à vérifier</button>`;
 
+  if(isMine){
   /* coût de possession */
   html += `<div class="sec-title">Coût de possession</div>`;
   html += tcoSection(v);
+  }
 
   /* entretiens / préconisations */
   html += `<div class="sec-title">Entretiens & préconisations</div>`;
@@ -1179,6 +1529,7 @@ function viewDetail(id){
   html += `<div style="margin-top:24px;">`;
   html += `<button class="btn btn-secondary" onclick="openModal('editVehicle',{vehicleId:${v.id}})">${editSvg}Modifier le véhicule</button>`;
   html += `<button class="btn btn-secondary" style="margin-top:10px;" onclick="exportVehiclePdf(${v.id})"><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M4 1.5h5l3 3V14a.5.5 0 0 1-.5.5h-7A.5.5 0 0 1 4 14V1.5z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/><path d="M9 1.5v3h3" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>Exporter en PDF</button>`;
+  if(isMine){
   html += `<button class="btn btn-secondary" style="margin-top:10px;" onclick="openModal('saleListing',{vehicleId:${v.id}})"><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2.6 7.6V3.4a1 1 0 0 1 1-1h4.1l5.9 5.9a1 1 0 0 1 0 1.4l-3.7 3.7a1 1 0 0 1-1.4 0L2.6 7.6z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/><circle cx="5.4" cy="5.4" r="1" fill="currentColor"/></svg>Générer une annonce de vente</button>`;
   if(v.status==='owned'){
     html += `<button class="btn btn-primary" style="margin-top:10px;" onclick="openModal('sell',{vehicleId:${v.id}})">Mettre en vente</button>`;
@@ -1187,26 +1538,37 @@ function viewDetail(id){
   } else {
     html += `<div class="empty" style="border-style:solid;margin-top:10px;">Ce véhicule a été vendu${v.salePrice?` pour ${fmtPrice(v.salePrice)}`:''}.</div>`;
   }
+  }
   html += `<button class="btn btn-danger" style="margin-top:10px;" onclick="confirmDeleteVehicle(${v.id})">${trashSvg}Supprimer le véhicule</button></div>`;
   return html;
 }
 
 /* ── ECHEANCES ── */
 function viewEcheances(){
-  const alerts = allAlerts();
-  if(!alerts.length) return `<div class="empty" style="margin-top:12px;">Aucune échéance à venir. Tout est à jour.</div>`;
+  const allA = allAlerts();
+  const alerts = allA.filter(a=>(a.veh.owner||'me')==='me');
+  const otherAlerts = allA.filter(a=>(a.veh.owner||'me')==='other');
+  if(!alerts.length && !otherAlerts.length) return `<div class="empty" style="margin-top:12px;">Aucune échéance à venir. Tout est à jour.</div>`;
   const danger = alerts.filter(a=>a.st.s==='danger'); const warn = alerts.filter(a=>a.st.s==='warn');
   let html = '';
   if(danger.length){ html += `<div class="sec-title" style="color:var(--danger);">En retard · ${danger.length}</div>` + danger.map(a=>alertRow(a)).join(''); }
   if(warn.length){ html += `<div class="sec-title" style="color:var(--warn);">À venir · ${warn.length}</div>` + warn.map(a=>alertRow(a)).join(''); }
+  if(!alerts.length){ html += `<div class="empty" style="margin-top:12px;">Tes véhicules sont à jour.</div>`; }
+  if(otherAlerts.length){
+    const oDanger = otherAlerts.filter(a=>a.st.s==='danger'); const oWarn = otherAlerts.filter(a=>a.st.s==='warn');
+    html += `<div class="sec-title" style="margin-top:24px;">Véhicules des autres</div>`;
+    if(oDanger.length){ html += `<div class="sec-title" style="color:var(--danger);">En retard · ${oDanger.length}</div>` + oDanger.map(a=>alertRow(a)).join(''); }
+    if(oWarn.length){ html += `<div class="sec-title" style="color:var(--warn);">À venir · ${oWarn.length}</div>` + oWarn.map(a=>alertRow(a)).join(''); }
+  }
   return html;
 }
 
 /* ── FINANCE ── */
 function euroIcon(c){ return `<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M11.5 4.6a4 4 0 1 0 0 6.8" stroke="${c}" stroke-width="1.4" stroke-linecap="round"/><path d="M3.4 7h6M3.4 9.2h5.2" stroke="${c}" stroke-width="1.4" stroke-linecap="round"/></svg>`; }
 function viewFinance(){
-  const all = vehicles;
-  const active = vehicles.filter(v=>v.status!=='sold');
+  const all = vehicles.filter(v=>(v.owner||'me')==='me');
+  const others = vehicles.filter(v=>(v.owner||'me')==='other');
+  const active = all.filter(v=>v.status!=='sold');
   const totalFuel = all.reduce((s,v)=>s+fuelSpend(v),0);
   const totalMaint = all.reduce((s,v)=>s+maintSpend(v),0);
   const total = totalFuel + totalMaint;
@@ -1284,6 +1646,21 @@ function viewFinance(){
     }).join('');
   } else { html += `<div class="empty">Aucun véhicule dans le parc.</div>`; }
   html += `<button class="btn btn-secondary" style="margin-top:12px;" onclick="openModal('compareVehicles')">Comparer deux véhicules</button>`;
+
+  if(others.length){
+    const tiersTotal = others.reduce((s,v)=>s+maintSpend(v),0);
+    html += `<div class="sec-title" style="margin-top:24px;">Dépenses pour des tiers</div>`;
+    html += `<div style="font-size:11px;color:var(--t3);line-height:1.5;margin-bottom:10px;">Ce que tu as payé ou avancé pour l'entretien des véhicules des autres. Séparé du patrimoine et du comparatif ci-dessus.</div>`;
+    html += `<div class="stat" style="padding:16px;margin-bottom:8px;"><div class="stat-label" style="margin:0 0 4px;">Total</div><div class="stat-val">${fmt(tiersTotal)}<span class="unit">€</span></div></div>`;
+    html += others.map(v=>{
+      const t = maintSpend(v);
+      return `<div class="row tap" onclick="openVehicle(${v.id})">
+        <div class="row-icon" style="background:var(--bg-4);">${icon('tire','var(--t2)')}</div>
+        <div class="row-body"><div class="row-name">${vehTitle(v)}</div><div class="row-sub">${v.ownerName?escapeHtml(v.ownerName):'Propriétaire non précisé'}</div></div>
+        <div style="font-family:var(--f-data);font-size:13px;color:var(--t1);">${fmtPrice(t)}</div>
+      </div>`;
+    }).join('');
+  }
   return html;
 }
 
@@ -1301,6 +1678,43 @@ function viewProfil(){
     <div class="field"><label class="field-label">Alerte échéance (jours avant)</label><input type="text" inputmode="numeric" class="mono" value="${settings.warnDays}" onchange="updateSetting('warnDays',this.value)"></div>
     <div class="field"><label class="field-label">Seuil d'anomalie de consommation (%)</label><input type="text" inputmode="numeric" class="mono" value="${settings.warnConsPct}" onchange="updateSetting('warnConsPct',this.value)"></div>
 
+    <div class="sec-title">Personnalisation</div>
+    <div class="field"><label class="field-label">Thème</label><div class="chips">
+      <div class="chip ${settings.theme!=='light'?'active':''}" onclick="updateSetting('theme','dark')">Sombre</div>
+      <div class="chip ${settings.theme==='light'?'active':''}" onclick="updateSetting('theme','light')">Clair</div>
+    </div></div>
+    <div class="field"><label class="field-label">Couleur d'accent</label><div class="chips">${Object.keys(ACCENT_PRESETS).map(k=>`<div class="chip ${settings.accent===k?'active':''}" onclick="updateSetting('accent','${k}')"><span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:${ACCENT_PRESETS[k]};margin-right:6px;vertical-align:middle;"></span>${ACCENT_LABEL[k]}</div>`).join('')}</div></div>
+    <div class="field"><label class="field-label">Densité d'affichage</label><div class="chips">
+      <div class="chip ${settings.density!=='compact'?'active':''}" onclick="updateSetting('density','comfortable')">Confortable</div>
+      <div class="chip ${settings.density==='compact'?'active':''}" onclick="updateSetting('density','compact')">Compacte</div>
+    </div></div>
+    <div class="field"><label class="field-label">Onglet par défaut à l'ouverture</label><select onchange="updateSetting('defaultTab',this.value)">
+      <option value="home" ${settings.defaultTab==='home'?'selected':''}>Accueil</option>
+      <option value="garage" ${settings.defaultTab==='garage'?'selected':''}>Garage</option>
+      <option value="echeances" ${settings.defaultTab==='echeances'?'selected':''}>Échéances</option>
+      <option value="finance" ${settings.defaultTab==='finance'?'selected':''}>Finance</option>
+      <option value="profil" ${settings.defaultTab==='profil'?'selected':''}>Réglages</option>
+    </select></div>
+    <div class="field"><label class="field-label">Tri par défaut du garage</label><select onchange="updateSetting('defaultGarageSort',this.value)">
+      <option value="alert" ${settings.defaultGarageSort==='alert'?'selected':''}>Par alerte</option>
+      <option value="name" ${settings.defaultGarageSort==='name'?'selected':''}>Par nom</option>
+      <option value="value" ${settings.defaultGarageSort==='value'?'selected':''}>Par valeur</option>
+      <option value="tag" ${settings.defaultGarageSort==='tag'?'selected':''}>Par étiquette</option>
+    </select></div>
+    <div class="field-row">
+      <div class="field"><label class="field-label">Format de date</label><select onchange="updateSetting('dateFormat',this.value)">
+        <option value="fr" ${settings.dateFormat==='fr'?'selected':''}>JJ/MM/AAAA</option>
+        <option value="iso" ${settings.dateFormat==='iso'?'selected':''}>AAAA-MM-JJ</option>
+        <option value="us" ${settings.dateFormat==='us'?'selected':''}>MM/JJ/AAAA</option>
+      </select></div>
+      <div class="field"><label class="field-label">Devise</label><select onchange="updateSetting('currency',this.value)">
+        <option value="EUR" ${settings.currency==='EUR'?'selected':''}>Euro (€)</option>
+        <option value="USD" ${settings.currency==='USD'?'selected':''}>Dollar ($)</option>
+        <option value="GBP" ${settings.currency==='GBP'?'selected':''}>Livre (£)</option>
+        <option value="CHF" ${settings.currency==='CHF'?'selected':''}>Franc suisse (CHF)</option>
+      </select></div>
+    </div>
+
     <div class="sec-title">Statistiques</div>
     <div class="detail-grid">
       <div class="detail-cell"><div class="detail-cell-l">Véhicules actifs</div><div class="detail-cell-v">${active.length}</div></div>
@@ -1308,6 +1722,7 @@ function viewProfil(){
       <div class="detail-cell"><div class="detail-cell-l">Préconisations</div><div class="detail-cell-v">${totalRecos}</div></div>
       <div class="detail-cell"><div class="detail-cell-l">Alertes actives</div><div class="detail-cell-v" style="${allAlerts().length?'color:var(--warn);':''}">${allAlerts().length}</div></div>
     </div>
+    <button class="btn btn-secondary" style="margin-top:12px;" onclick="openModal('consistency')">${(()=>{const n=scanConsistency().length; return n?`Vérifier la cohérence des données (${n})`:'Vérifier la cohérence des données';})()}</button>
 
     <div class="sec-title">Données</div>
     <div class="row solo">
@@ -1330,7 +1745,20 @@ function viewProfil(){
       : `<button class="btn btn-primary" onclick="activateSync()">Activer la synchronisation</button>`}
     <div style="font-size:10.5px;color:var(--t3);line-height:1.5;margin-top:10px;">Le token est stocké uniquement sur cet appareil et n'est jamais inclus dans les exports. Crée-le sur GitHub → Settings → Developer settings → Fine-grained tokens, limité à ce seul dépôt.</div>
 
-    <div style="text-align:center;margin-top:24px;"><div style="font-family:var(--f-display);font-size:18px;font-weight:800;letter-spacing:0.04em;color:var(--t3);">PITSTOP <span style="color:var(--accent);">MANAGER</span></div><div style="font-family:var(--f-data);font-size:10px;color:var(--t3);letter-spacing:0.12em;margin-top:3px;">v1.5.1</div></div>
+    <div class="sec-title" style="margin-top:24px;">Notifications</div>
+    <div style="font-size:11px;color:var(--t3);line-height:1.5;margin-bottom:12px;">Reçois une vraie notification (même app fermée) quand une échéance approche. Repose sur une tâche planifiée gratuite (GitHub Actions) à configurer une fois — voir l'aide pour le détail des étapes.</div>
+    ${notif.enabled ? `
+      <div style="font-size:12px;color:var(--t2);margin-bottom:12px;">État : <span style="color:var(--ok);">Activées sur cet appareil</span></div>
+      <button class="btn btn-secondary" onclick="downloadNotifSecrets()">Télécharger les clés (secrets GitHub)</button>
+      <button class="btn btn-secondary" style="margin-top:10px;" onclick="downloadNotifWorkflow()">Télécharger la tâche planifiée (notify.yml)</button>
+      <button class="btn btn-secondary" style="margin-top:10px;" onclick="downloadNotifScript()">Télécharger le script (notify-check.js)</button>
+      <button class="btn btn-danger" style="margin-top:10px;" onclick="disableNotifications()">Désactiver les notifications</button>
+    ` : `
+      <button class="btn btn-primary" onclick="enableNotifications()">Activer les notifications</button>
+      ${notif.lastError?`<div style="font-size:11px;color:var(--danger);margin-top:8px;">${escapeHtml(notif.lastError)}</div>`:''}
+    `}
+
+    <div style="text-align:center;margin-top:24px;"><div style="font-family:var(--f-display);font-size:18px;font-weight:800;letter-spacing:0.04em;color:var(--t3);">PITSTOP <span style="color:var(--accent);">MANAGER</span></div><div style="font-family:var(--f-data);font-size:10px;color:var(--t3);letter-spacing:0.12em;margin-top:3px;">v2.0 <span class="help-icon" onclick="openModal('help')" title="Aide">?</span></div></div>
   </div>`;
 }
 
@@ -1373,6 +1801,10 @@ function renderModal(){
     case 'addSpec':         inner = modalAddSpec(); break;
     case 'editSpec':        inner = modalEditSpec(); break;
     case 'compareVehicles': inner = modalCompareVehicles(); break;
+    case 'pickVehicleShortcut': inner = modalPickVehicleShortcut(); break;
+    case 'globalSearch':    inner = modalGlobalSearch(); break;
+    case 'consistency':     inner = modalConsistency(); break;
+    case 'help':             inner = modalHelp(); break;
   }
   m.innerHTML = `<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal"><div class="modal-handle"></div>${inner}</div></div>`;
 }
@@ -1384,7 +1816,13 @@ function modalConfirm(){
 }
 function modalAddVehicle(){
   const cats = Object.entries(CAT);
+  const owner = state.draft.owner || 'me';
   return `<div class="modal-title">NOUVEAU VÉHICULE</div><div class="modal-desc">Voiture, moto, cyclomoteur ou autre engin</div>
+    <div class="field"><label class="field-label">Propriétaire</label><div class="chips">
+      <div class="chip ${owner==='me'?'active':''}" onclick="setVehicleOwner('me')">M'appartient</div>
+      <div class="chip ${owner==='other'?'active':''}" onclick="setVehicleOwner('other')">Appartient à quelqu'un d'autre</div>
+    </div></div>
+    ${owner==='other'?`<div class="field"><label class="field-label">Nom du propriétaire <span style="color:var(--t3);">(opt.)</span></label><input id="f-ownername" placeholder="ex : Julie"></div>`:''}
     <div class="field"><label class="field-label">Catégorie</label><select id="f-cat">${cats.map(([k,l])=>`<option value="${k}">${l}</option>`).join('')}</select></div>
     <div class="field"><label class="field-label">Unité de suivi</label><div class="chips">
       <div class="chip ${state.draft.unit==='km'?'active':''}" onclick="pickChip('unit','km',this)">Kilomètres</div>
@@ -1395,16 +1833,24 @@ function modalAddVehicle(){
     <div class="field"><label class="field-label">Nom / désignation <span style="color:var(--t3);">(si pas de marque)</span></label><input id="f-name" placeholder="Buggy, kart…"></div>
     <div class="field-row"><div class="field"><label class="field-label">Immatriculation <span style="color:var(--t3);">(opt.)</span></label><input id="f-plate" class="mono"></div>
       <div class="field"><label class="field-label">Compteur <span style="color:var(--t3);">(opt.)</span></label><input id="f-usage" class="mono" inputmode="numeric"></div></div>
+    <div class="field"><label class="field-label">VIN / numéro de série <span style="color:var(--t3);">(opt.)</span></label><input id="f-vin" class="mono" maxlength="17" style="text-transform:uppercase;"></div>
     <div class="field-row"><div class="field"><label class="field-label">Carburant</label><select id="f-fuel"><option>Essence</option><option>Diesel</option><option>Hybride</option><option>Électrique</option><option>GPL</option><option>Mélange 2T</option></select></div>
-      <div class="field"><label class="field-label">Prix d'achat (€) <span style="color:var(--t3);">(opt.)</span></label><input id="f-price" class="mono" inputmode="numeric"></div></div>
+      ${owner==='me'?`<div class="field"><label class="field-label">Prix d'achat (€) <span style="color:var(--t3);">(opt.)</span></label><input id="f-price" class="mono" inputmode="numeric"></div>`:''}</div>
     <div class="field"><label class="field-label">Étiquettes <span style="color:var(--t3);">(séparées par des virgules)</span></label><input id="f-tags" placeholder="Perso, Projet…"></div>
     <div class="btn-row"><button class="btn btn-secondary" onclick="closeModal()">Annuler</button><button class="btn btn-primary" onclick="saveVehicle()">Ajouter</button></div>`;
 }
+function setVehicleOwner(v){ state.draft.owner = v; renderModal(); }
 function modalEditVehicle(){
   const v = byId(state.ctx.vehicleId);
   const cats = Object.entries(CAT);
   const fuels = ['Essence','Diesel','Hybride','Électrique','GPL','Mélange 2T'];
+  const owner = state.draft.owner || v.owner || 'me';
   return `<div class="modal-title">MODIFIER LE VÉHICULE</div><div class="modal-desc">Corrige les informations de ${vehTitle(v)}</div>
+    <div class="field"><label class="field-label">Propriétaire</label><div class="chips">
+      <div class="chip ${owner==='me'?'active':''}" onclick="setVehicleOwner('me')">M'appartient</div>
+      <div class="chip ${owner==='other'?'active':''}" onclick="setVehicleOwner('other')">Appartient à quelqu'un d'autre</div>
+    </div></div>
+    ${owner==='other'?`<div class="field"><label class="field-label">Nom du propriétaire <span style="color:var(--t3);">(opt.)</span></label><input id="f-ownername" value="${escapeHtml(v.ownerName||'')}" placeholder="ex : Julie"></div>`:''}
     <div class="field"><label class="field-label">Catégorie</label><select id="f-cat">${cats.map(([k,l])=>`<option value="${k}" ${v.category===k?'selected':''}>${l}</option>`).join('')}</select></div>
     <div class="field"><label class="field-label">Unité de suivi</label><div class="chips">
       <div class="chip ${state.draft.unit==='km'?'active':''}" onclick="pickChip('unit','km',this)">Kilomètres</div>
@@ -1415,9 +1861,10 @@ function modalEditVehicle(){
     <div class="field"><label class="field-label">Nom / désignation</label><input id="f-name" value="${escapeHtml(v.name||'')}"></div>
     <div class="field-row"><div class="field"><label class="field-label">Immatriculation</label><input id="f-plate" class="mono" value="${escapeHtml(v.plate||'')}"></div>
       <div class="field"><label class="field-label">Compteur (${unitL(v)})</label><input id="f-usage" class="mono" inputmode="numeric" value="${v.usage}"></div></div>
+    <div class="field"><label class="field-label">VIN / numéro de série <span style="color:var(--t3);">(opt.)</span></label><input id="f-vin" class="mono" maxlength="17" style="text-transform:uppercase;" value="${escapeHtml(v.vin||'')}"></div>
     <div class="field"><label class="field-label">Carburant</label><select id="f-fuel">${fuels.map(f=>`<option ${v.fuel===f?'selected':''}>${f}</option>`).join('')}</select></div>
-    <div class="field-row"><div class="field"><label class="field-label">Prix d'achat (€)</label><input id="f-price" class="mono" inputmode="numeric" value="${v.purchasePrice||''}"></div>
-      <div class="field"><label class="field-label">Valeur estimée (€)</label><input id="f-estvalue" class="mono" inputmode="numeric" value="${v.estValue||''}"></div></div>
+    ${owner==='me'?`<div class="field-row"><div class="field"><label class="field-label">Prix d'achat (€)</label><input id="f-price" class="mono" inputmode="numeric" value="${v.purchasePrice||''}"></div>
+      <div class="field"><label class="field-label">Valeur estimée (€)</label><input id="f-estvalue" class="mono" inputmode="numeric" value="${v.estValue||''}"></div></div>`:''}
     <div class="field"><label class="field-label">Étiquettes <span style="color:var(--t3);">(séparées par des virgules)</span></label><input id="f-tags" value="${escapeHtml((v.tags||[]).join(', '))}" placeholder="Perso, Projet…"></div>
     <div class="btn-row"><button class="btn btn-secondary" onclick="closeModal()">Annuler</button><button class="btn btn-primary" onclick="saveEditVehicle()">Enregistrer</button></div>`;
 }
@@ -1686,9 +2133,9 @@ function setCompareVehicle(which, id){
   renderModal();
 }
 function modalCompareVehicles(){
-  const opts = v => `<option value="${v.id}">${escapeHtml(vehTitle(v))}${v.status==='sold'?' (vendu)':v.status==='for_sale'?' (en vente)':''}</option>`;
+  const mine = vehicles.filter(v=>(v.owner||'me')==='me');
   const selectHtml = (which, selId) => `<select onchange="setCompareVehicle('${which}',this.value)">
-      <option value="">— Choisir —</option>${vehicles.map(v=>`<option value="${v.id}" ${v.id===selId?'selected':''}>${escapeHtml(vehTitle(v))}${v.status==='sold'?' (vendu)':v.status==='for_sale'?' (en vente)':''}</option>`).join('')}
+      <option value="">— Choisir —</option>${mine.map(v=>`<option value="${v.id}" ${v.id===selId?'selected':''}>${escapeHtml(vehTitle(v))}${v.status==='sold'?' (vendu)':v.status==='for_sale'?' (en vente)':''}</option>`).join('')}
     </select>`;
   const a = byId(state.ctx.cmpA), b = byId(state.ctx.cmpB);
   let rows = '';
@@ -1727,8 +2174,8 @@ function openVehicle(id){ state.pageAnim=true; state.vehicleId=id; state.tab='ga
 function goBack(){ state.pageAnim=true; state.vehicleId=null; state.tab='garage'; render(); }
 function openModal(name, ctx){
   state.modal=name; state.ctx=ctx||{}; state.draft={};
-  if(name==='addVehicle') state.draft.unit='km';
-  if(name==='editVehicle'){ const v=byId(ctx.vehicleId); state.draft.unit=v.unit||'km'; }
+  if(name==='addVehicle'){ state.draft.unit='km'; state.draft.owner='me'; }
+  if(name==='editVehicle'){ const v=byId(ctx.vehicleId); state.draft.unit=v.unit||'km'; state.draft.owner=v.owner||'me'; }
   if(name==='addReco')    state.draft.recoType='oil';
   if(name==='addDeadline')state.draft.recurrence='none';
   if(name==='editReco'){ const v=byId(ctx.vehicleId); const r=v.recos.find(x=>x.id===ctx.recoId); state.draft.recoType=r.type; }
@@ -1739,7 +2186,8 @@ function openModal(name, ctx){
   }
   if(name==='checksAll'){ const v=byId(ctx.vehicleId); const items=(v&&v.checkItems)||[]; state.ctx.checkType = ctx.checkType || (items[0]?items[0].key:null); }
   if(name==='addCheckItem'){ state.draft.itemMode='level'; }
-  if(name==='compareVehicles'){ state.ctx.cmpA = vehicles[0] ? vehicles[0].id : null; state.ctx.cmpB = vehicles[1] ? vehicles[1].id : null; }
+  if(name==='compareVehicles'){ const mine=vehicles.filter(v=>(v.owner||'me')==='me'); state.ctx.cmpA = mine[0] ? mine[0].id : null; state.ctx.cmpB = mine[1] ? mine[1].id : null; }
+  if(name==='globalSearch'){ state.searchQuery=''; }
   renderModal();
 }
 function closeModal(){ state.modal=null; state.ctx={}; state.draft={}; _confirmCb=null; _choiceA=null; _choiceB=null; renderModal(); }
@@ -1775,10 +2223,15 @@ function val(id){ const e=document.getElementById(id); return e?e.value.trim():'
 function num(id){ return parseInt(val(id).replace(/\s/g,'').replace(',','.'),10)||0; }
 function flt(id){ return parseFloat(val(id).replace(/\s/g,'').replace(',','.'))||0; }
 
+const NUMERIC_SETTINGS = ['warnKm','warnHours','warnDays','warnConsPct'];
+const STRING_SETTINGS = ['theme','accent','defaultTab','defaultGarageSort','density','dateFormat','currency'];
 function updateSetting(k, v){
   if(k==='name') settings.name = v.trim();
-  else settings[k] = Math.max(0, parseInt(String(v).replace(/\s/g,''),10)||0);
+  else if(STRING_SETTINGS.includes(k)) settings[k] = v;
+  else if(NUMERIC_SETTINGS.includes(k)) settings[k] = Math.max(0, parseInt(String(v).replace(/\s/g,''),10)||0);
+  else settings[k] = v;
   save();
+  if(STRING_SETTINGS.includes(k)) render();
 }
 
 /* vehicles */
@@ -1786,12 +2239,14 @@ function parseTags(id){ return val(id).split(',').map(t=>t.trim()).filter(Boolea
 function saveVehicle(){
   const brand=val('f-brand'), model=val('f-model'), name=val('f-name');
   if(!brand && !model && !name){ toast('Renseigne au moins une marque, un modèle ou un nom.'); return; }
-  const price = num('f-price'); const usage = num('f-usage');
+  const owner = state.draft.owner==='other' ? 'other' : 'me';
+  const price = owner==='me' ? num('f-price') : 0; const usage = num('f-usage');
   vehicles.unshift({
     id:++nextId, category:val('f-cat')||'autre', brand, model, name,
-    year:num('f-year')||null, plate:val('f-plate'), unit:state.draft.unit||'km', usage,
+    year:num('f-year')||null, plate:val('f-plate'), vin:val('f-vin').trim().toUpperCase(), unit:state.draft.unit||'km', usage,
     fuel:val('f-fuel')||'Essence', purchasePrice:price, estValue: price?Math.round(price*0.85):0,
     status:'owned', salePrice:null, tags:parseTags('f-tags'),
+    owner, ownerName: owner==='other' ? val('f-ownername').trim() : '',
     recos:[], history:[], deadlines:[], fuelLogs:[], usageLog:[{id:++nextId, date:todayISO(), value:usage}], notes:[], checks:[],
     checkItems: BUILTIN_CHECK_ITEMS.map(it=>({key:it.key, label:it.label, mode:it.mode, custom:false, recurrenceMonths:null})),
     specs:[],
@@ -1802,9 +2257,12 @@ function saveEditVehicle(){
   const v=byId(state.ctx.vehicleId);
   const brand=val('f-brand'), model=val('f-model'), name=val('f-name');
   if(!brand && !model && !name){ toast('Renseigne au moins une marque, un modèle ou un nom.'); return; }
+  const owner = state.draft.owner==='other' ? 'other' : 'me';
   v.category=val('f-cat')||v.category; v.brand=brand; v.model=model; v.name=name;
-  v.year=num('f-year')||null; v.plate=val('f-plate'); v.unit=state.draft.unit||v.unit; v.usage=num('f-usage');
-  v.fuel=val('f-fuel')||v.fuel; v.purchasePrice=num('f-price'); v.estValue=num('f-estvalue'); v.tags=parseTags('f-tags');
+  v.year=num('f-year')||null; v.plate=val('f-plate'); v.vin=val('f-vin').trim().toUpperCase(); v.unit=state.draft.unit||v.unit; v.usage=num('f-usage');
+  v.fuel=val('f-fuel')||v.fuel; v.tags=parseTags('f-tags');
+  v.owner = owner; v.ownerName = owner==='other' ? val('f-ownername').trim() : '';
+  if(owner==='me'){ v.purchasePrice=num('f-price'); v.estValue=num('f-estvalue'); } // sinon : champs masqués, valeurs existantes conservées
   closeModal(); save(); render(); toast('Véhicule modifié');
 }
 function putForSale(){ const v=byId(state.ctx.vehicleId); v.status='for_sale'; v.salePrice=num('f-saleprice')||v.estValue||0; closeModal(); save(); render(); }
@@ -2154,7 +2612,7 @@ function applyImport(data){
   const count = data.vehicles.length;
   confirmDialog('Importer les données', `${count} véhicule(s) détecté(s). Tes données actuelles seront remplacées. Continuer ?`, 'Importer', ()=>{
     vehicles = data.vehicles;
-    settings = Object.assign({name:'',warnKm:1500,warnHours:10,warnDays:30,warnConsPct:25}, data.settings||{});
+    settings = Object.assign({}, DEFAULT_SETTINGS, data.settings||{});
     nextId = data.nextId || 600;
     if(data.sync && (data.sync.repo || data.sync.token)){
       sync.repo = data.sync.repo || '';
@@ -2196,7 +2654,10 @@ let _pendingPush = false;
 
 function syncConfigured(){ return !!(sync.repo && sync.token); }
 function syncReady(){ return sync.enabled && syncConfigured(); }
-function syncDataBlob(){ return { app:'PitStop Manager', version:3, dataUpdatedAt, exportedAt:new Date().toISOString(), settings, nextId, onboarded, vehicles }; }
+function syncDataBlob(){
+  const notifications = (notif.enabled && notif.subscription) ? { publicKey: notif.publicKey, subscription: notif.subscription } : null;
+  return { app:'PitStop Manager', version:3, dataUpdatedAt, exportedAt:new Date().toISOString(), settings, nextId, onboarded, vehicles, notifications };
+}
 
 function strToB64(str){ const bytes=new TextEncoder().encode(str); let bin=''; bytes.forEach(b=>bin+=String.fromCharCode(b)); return btoa(bin); }
 function b64ToStr(b64){ const bin=atob(String(b64).replace(/\s/g,'')); const bytes=Uint8Array.from(bin, c=>c.charCodeAt(0)); return new TextDecoder().decode(bytes); }
@@ -2284,7 +2745,7 @@ function flushPending(){
 
 function applyRemoteBlob(blob){
   vehicles = blob.vehicles || [];
-  settings = Object.assign({name:'',warnKm:1500,warnHours:10,warnDays:30,warnConsPct:25}, blob.settings||{});
+  settings = Object.assign({}, DEFAULT_SETTINGS, blob.settings||{});
   nextId = blob.nextId || 600;
   if(typeof blob.onboarded==='boolean') onboarded = blob.onboarded;
   dataUpdatedAt = blob.dataUpdatedAt || Date.now();
@@ -2351,11 +2812,115 @@ function disableSync(){
 }
 function syncNow(){ if(!syncConfigured()){ toast('Configure d\'abord la synchro.'); return; } toast('Synchronisation…'); syncPull(false); }
 
+/* ════════════ NOTIFICATIONS PUSH ════════════ */
+function b64urlEncode(buf){
+  const bytes = new Uint8Array(buf);
+  let bin = ''; bytes.forEach(b => bin += String.fromCharCode(b));
+  return btoa(bin).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
+}
+function b64urlToUint8Array(str){
+  const pad = '='.repeat((4 - str.length % 4) % 4);
+  const base64 = (str + pad).replace(/-/g,'+').replace(/_/g,'/');
+  const bin = atob(base64);
+  const out = new Uint8Array(bin.length);
+  for(let i=0;i<bin.length;i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+async function generateVapidKeys(){
+  const kp = await crypto.subtle.generateKey({name:'ECDSA', namedCurve:'P-256'}, true, ['sign','verify']);
+  const rawPublic = await crypto.subtle.exportKey('raw', kp.publicKey);
+  const jwkPrivate = await crypto.subtle.exportKey('jwk', kp.privateKey);
+  return { publicKey: b64urlEncode(rawPublic), privateKey: jwkPrivate.d };
+}
+function notifSupported(){ return typeof window!=='undefined' && 'serviceWorker' in navigator && 'PushManager' in window && typeof crypto!=='undefined' && crypto.subtle; }
+async function enableNotifications(){
+  if(!notifSupported()){ toast('Notifications non disponibles sur cet appareil/navigateur.'); return; }
+  if(!syncConfigured()){ toast('Configure d\'abord la synchronisation : les notifications s\'appuient sur ton dépôt de données.'); return; }
+  try{
+    const perm = await Notification.requestPermission();
+    if(perm!=='granted'){ toast('Permission refusée pour les notifications.'); return; }
+    const keys = await generateVapidKeys();
+    const reg = await navigator.serviceWorker.ready;
+    const sub = await reg.pushManager.subscribe({ userVisibleOnly:true, applicationServerKey: b64urlToUint8Array(keys.publicKey) });
+    notif = { enabled:true, publicKey:keys.publicKey, privateKey:keys.privateKey, subscription: sub.toJSON(), lastError:'' };
+    persist(); save(); render();
+    toast('Notifications activées — télécharge les fichiers pour finir la configuration.');
+  }catch(e){ notif.lastError = e.message; persist(); toast('Échec : '+e.message); render(); }
+}
+async function disableNotifications(){
+  try{
+    if('serviceWorker' in navigator){
+      const reg = await navigator.serviceWorker.ready;
+      const sub = await reg.pushManager.getSubscription();
+      if(sub) await sub.unsubscribe();
+    }
+  }catch(e){ /* on nettoie quand même localement */ }
+  notif = { enabled:false, publicKey:'', privateKey:'', subscription:null, lastError:'' };
+  persist(); save(); render(); toast('Notifications désactivées');
+}
+function downloadTextFile(filename, text, mime){
+  try{
+    const blob = new Blob([text], {type: mime||'text/plain'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a'); a.href=url; a.download=filename; document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(()=>URL.revokeObjectURL(url), 2000);
+  }catch(e){ toast('Téléchargement impossible : '+e.message); }
+}
+function downloadNotifSecrets(){
+  const content = `Clés VAPID — PitStop Manager\n` +
+`À ajouter comme secrets du dépôt GitHub (Settings > Secrets and variables > Actions > New repository secret),\n` +
+`sur le dépôt qui contient ton backup.json (celui de la synchronisation).\n\n` +
+`Nom du secret : VAPID_PUBLIC_KEY\nValeur : ${notif.publicKey}\n\n` +
+`Nom du secret : VAPID_PRIVATE_KEY\nValeur : ${notif.privateKey}\n\n` +
+`Ne partage jamais ce fichier ni la clé privée : quiconque la possède peut envoyer des notifications à ta place.`;
+  downloadTextFile('pitstop-vapid-secrets.txt', content);
+}
+function downloadNotifWorkflow(){ downloadTextFile('notify.yml', NOTIF_WORKFLOW_YML, 'text/yaml'); }
+function downloadNotifScript(){ downloadTextFile('notify-check.js', NOTIF_CHECK_SCRIPT, 'text/javascript'); }
+
+/* ════════════ RACCOURCIS D'ACCUEIL (iOS/Android) ════════════ */
+function handleShortcutAction(){
+  if(typeof location==='undefined' || !location.search) return;
+  const params = new URLSearchParams(location.search);
+  const action = params.get('action');
+  if(!action) return;
+  if(typeof history!=='undefined' && history.replaceState){ history.replaceState(null, '', location.pathname); }
+  if(action==='echeances'){ state.tab='echeances'; state.vehicleId=null; render(); return; }
+  const eligible = vehicles.filter(v=>v.status!=='sold');
+  if(!eligible.length){ state.tab='garage'; render(); toast('Ajoute un véhicule pour utiliser ce raccourci.'); return; }
+  if(eligible.length===1){ runShortcutAction(action, eligible[0].id); return; }
+  state.tab='garage'; state.pendingShortcut = action; render();
+  openModal('pickVehicleShortcut', {});
+}
+function runShortcutAction(action, vehicleId){
+  if(action==='addFuel') openModal('addFuel', {vehicleId});
+  else if(action==='logUsage') openModal('logUsage', {vehicleId});
+  else if(action==='addCheck') openModal('addCheck', {vehicleId});
+}
+function chooseShortcutVehicle(vehicleId){
+  const action = state.pendingShortcut; state.pendingShortcut = null;
+  if(action) runShortcutAction(action, vehicleId);
+}
+function modalPickVehicleShortcut(){
+  const eligible = vehicles.filter(v=>v.status!=='sold');
+  const labels = {addFuel:'ajouter un plein', logUsage:'relever le compteur', addCheck:'faire une vérification'};
+  const rows = eligible.map(v=>`<div class="row tap" onclick="chooseShortcutVehicle(${v.id})">
+    <div class="row-icon" style="background:var(--bg-4);">${icon('tire','var(--t2)')}</div>
+    <div class="row-body"><div class="row-name">${vehTitle(v)}</div><div class="row-sub">${v.plate||catLabel(v)}</div></div>
+  </div>`).join('');
+  return `<div class="modal-title">CHOISIR UN VÉHICULE</div><div class="modal-desc">Pour ${labels[state.pendingShortcut]||'cette action'}.</div>
+    ${rows}
+    <button class="btn btn-secondary" style="margin-top:12px;" onclick="state.pendingShortcut=null;closeModal();">Annuler</button>`;
+}
+
 window.addEventListener('resize', onResize);
 if('serviceWorker' in navigator){ window.addEventListener('load', ()=>{ navigator.serviceWorker.register('sw.js').catch(()=>{}); }); }
 load();
+state.tab = settings.defaultTab || 'home';
+state.garageSort = settings.defaultGarageSort || 'alert';
 render();
 syncOnStartup();
+handleShortcutAction();
 </script>
 </body>
 </html>

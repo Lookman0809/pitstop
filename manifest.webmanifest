@@ -12,5 +12,11 @@
   "icons": [
     { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
     { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ],
+  "shortcuts": [
+    { "name": "Ajouter un plein", "url": "./pitstop-manager-app.html?action=addFuel", "icons": [{ "src": "icon-192.png", "sizes": "192x192" }] },
+    { "name": "Relever le compteur", "url": "./pitstop-manager-app.html?action=logUsage", "icons": [{ "src": "icon-192.png", "sizes": "192x192" }] },
+    { "name": "Faire une vérification", "url": "./pitstop-manager-app.html?action=addCheck", "icons": [{ "src": "icon-192.png", "sizes": "192x192" }] },
+    { "name": "Voir les échéances", "url": "./pitstop-manager-app.html?action=echeances", "icons": [{ "src": "icon-192.png", "sizes": "192x192" }] }
   ]
 }

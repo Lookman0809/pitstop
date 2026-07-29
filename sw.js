@@ -2,7 +2,7 @@
    Stratégie : "réseau d'abord" pour la page (toujours la dernière version en
    ligne quand il y a du réseau), "cache d'abord" pour les icônes et les polices
    (rapidité + hors-ligne). Repli complet sur le cache quand hors-ligne. */
-const CACHE = 'pitstop-1.5';
+const CACHE = 'pitstop-2.0';
 
 const ASSETS = [
   './',
@@ -29,6 +29,32 @@ self.addEventListener('activate', (e) => {
 });
 
 self.addEventListener('message', (e) => { if (e.data === 'skipWaiting') self.skipWaiting(); });
+
+/* Notifications push (déclenchées par la tâche planifiée GitHub Actions) */
+self.addEventListener('push', (e) => {
+  let data = {};
+  try { data = e.data ? e.data.json() : {}; } catch (err) { data = { title: 'PitStop Manager', body: e.data ? e.data.text() : '' }; }
+  const title = data.title || 'PitStop Manager';
+  const options = {
+    body: data.body || 'Une échéance approche.',
+    icon: './icon-192.png',
+    badge: './icon-192.png',
+    tag: data.tag || 'pitstop-alert',
+    data: { url: data.url || './pitstop-manager-app.html' }
+  };
+  e.waitUntil(self.registration.showNotification(title, options));
+});
+
+self.addEventListener('notificationclick', (e) => {
+  e.notification.close();
+  const url = (e.notification.data && e.notification.data.url) || './pitstop-manager-app.html';
+  e.waitUntil(
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clients) => {
+      for (const c of clients) { if ('focus' in c) return c.focus(); }
+      if (self.clients.openWindow) return self.clients.openWindow(url);
+    })
+  );
+});
 
 self.addEventListener('fetch', (e) => {
   if (e.request.method !== 'GET') return;
