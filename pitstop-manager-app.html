@@ -106,6 +106,10 @@
   .garage-search::placeholder{color:var(--t3);}
   .help-icon{display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;border-radius:50%;border:1px solid var(--b2);color:var(--t3);font-size:10px;font-weight:700;cursor:pointer;vertical-align:middle;margin-left:4px;}
   .help-icon:hover{color:var(--t1);border-color:var(--b3);}
+  .quick-actions{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:4px;}
+  .quick-action{display:flex;flex-direction:column;align-items:center;gap:6px;background:var(--bg-2);border:1px solid var(--b1);border-radius:var(--r-md);padding:12px 4px;color:var(--t1);font-family:var(--f-body);font-size:11px;font-weight:600;cursor:pointer;}
+  .quick-action:active{background:var(--bg-3);}
+  .quick-action-ic{width:30px;height:30px;border-radius:9px;background:var(--accent-dim);display:flex;align-items:center;justify-content:center;}
   .cmp-table{margin-top:14px;border:1px solid var(--b1);border-radius:var(--r-md);overflow:hidden;}
   .cmp-row{display:grid;grid-template-columns:1fr auto 1fr;gap:8px;align-items:center;padding:10px 12px;border-bottom:1px solid var(--b1);}
   .cmp-row:last-child{border-bottom:none;}
@@ -268,6 +272,55 @@
 <script>
 /* ════════════ CATEGORIES ════════════ */
 const CAT = { voiture:'Voiture', moto:'Moto', cyclomoteur:'Cyclomoteur', autre:'Autre' };
+const APP_VERSION = '2.0.2';
+const CHANGELOG = [
+  { v:'2.0.2', items:[
+    'Aide notifications détaillée : création du dossier .github/workflows, précision Secrets (pas Variables), étapes de commit.',
+  ]},
+  { v:'2.0.1', items:[
+    'Icône d\'aide déplacée sur la page d\'accueil, à gauche de la recherche, et rendue plus lisible.',
+    'Vrai journal des nouveautés (cette liste), accessible via l\'icône « i » à côté du numéro de version.',
+    'Actions rapides sur l\'accueil (plein, compteur, vérification, échéances) : alternative aux raccourcis d\'appui long, qui ne sont pas pris en charge par iOS.',
+  ]},
+  { v:'2.0', items:[
+    'Recherche globale (icône loupe) sur tout le parc : véhicules, notes, fiches techniques, entretiens, échéances, vérifications.',
+    'Contrôle de cohérence des données (Réglages) : signale compteur qui recule, vérification très en retard, doublons, etc.',
+    'Page d\'aide et journal des nouveautés.',
+    'Notifications push réelles via une tâche planifiée GitHub Actions (configuration dans Réglages).',
+    'Véhicules des autres : bascule dans Garage, masque consommation/coût de possession/vente, sections séparées en Accueil/Échéances/Finance.',
+    'Champ VIN optionnel sur chaque véhicule.',
+    'Personnalisation : thème clair/sombre, couleur d\'accent, densité, onglet et tri par défaut, format de date et devise.',
+    'Raccourcis d\'accueil (Android/PC) et actions rapides en page d\'accueil.',
+  ]},
+  { v:'1.5.1', items:[
+    'Vérifications avec mode pression pour les pneus (Basse/Correct/Haute) et champs personnalisés.',
+    'Rappel de récurrence sur les vérifications, remonté dans Échéances.',
+    'Fiche technique personnalisable (capacités, pressions, couples de serrage…).',
+  ]},
+  { v:'1.5', items:[
+    'Vérifications de niveaux et pression avec historique.',
+    'Notes libres par véhicule.',
+    'Comparatif du parc et comparaison de deux véhicules (véhicules vendus inclus).',
+    'Nouveau style de graphique pour le compteur et la consommation.',
+  ]},
+  { v:'1.4', items:[
+    'Synchronisation automatique entre appareils via un dépôt GitHub privé.',
+  ]},
+  { v:'1.3', items:[
+    'Transitions animées entre les pages et les étapes de l\'introduction.',
+  ]},
+  { v:'1.2', items:[
+    'Préconisations en kilomètres et/ou en mois.',
+    'Alerte d\'anomalie de consommation.',
+    'Historique du compteur, cas des véhicules électriques.',
+    'Projection de budget, coût de possession.',
+    'Recherche et tri du garage, étiquettes, fiche de vente.',
+  ]},
+  { v:'1.0', items:[
+    'Première version : garage, entretiens, pleins, échéances, finances, export/import, installation PWA.',
+  ]},
+];
+
 const DEFAULT_SETTINGS = { name:'', warnKm:1500, warnHours:10, warnDays:30, warnConsPct:25,
   theme:'dark', accent:'orange', defaultTab:'home', defaultGarageSort:'alert', density:'comfortable', dateFormat:'fr', currency:'EUR' };
 const ACCENT_PRESETS = { orange:'#F0521A', bleu:'#3B82F6', vert:'#22C55E', violet:'#A78BFA', rouge:'#EF4444' };
@@ -746,36 +799,58 @@ function modalConsistency(){
     ${issues.length?rows:`<div class="empty">Tes données semblent cohérentes.</div>`}
     <button class="btn btn-secondary" style="margin-top:14px;" onclick="closeModal()">Fermer</button>`;
 }
-function helpSection(title, html){ return `<div class="sec-title" style="margin-top:18px;">${title}</div><div style="font-size:12.5px;color:var(--t2);line-height:1.65;">${html}</div>`; }
+function helpCard(iconSvg, title, intro, steps, note){
+  const stepsHtml = (steps||[]).map((s,i)=>`<div style="display:flex;gap:11px;align-items:flex-start;margin-top:${i===0?12:9}px;">
+    <div style="width:20px;height:20px;border-radius:50%;background:var(--accent-dim);color:var(--accent);font-family:var(--f-data);font-size:10.5px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:1px;">${i+1}</div>
+    <div style="font-size:12.5px;color:var(--t2);line-height:1.55;">${s}</div>
+  </div>`).join('');
+  return `<div style="background:var(--bg-2);border:1px solid var(--b1);border-radius:var(--r-md);padding:16px;margin-bottom:14px;">
+    <div style="display:flex;gap:10px;align-items:center;margin-bottom:8px;">
+      <div style="width:32px;height:32px;border-radius:9px;background:var(--accent-dim);display:flex;align-items:center;justify-content:center;flex-shrink:0;">${iconSvg}</div>
+      <div style="font-family:var(--f-display);font-size:16px;font-weight:700;letter-spacing:0.02em;color:var(--t1);text-transform:uppercase;">${title}</div>
+    </div>
+    ${intro?`<div style="font-size:12.5px;color:var(--t2);line-height:1.55;">${intro}</div>`:''}
+    ${stepsHtml}
+    ${note?`<div style="font-size:11px;color:var(--t3);line-height:1.5;margin-top:12px;padding-top:10px;border-top:1px solid var(--b1);">${note}</div>`:''}
+  </div>`;
+}
 function modalHelp(){
-  const usage = `
-    <p><b style="color:var(--t1);">Garage</b> : ajoute tes véhicules, bascule entre « Mes véhicules » et « Véhicules des autres » en haut de l'écran.</p>
-    <p style="margin-top:8px;"><b style="color:var(--t1);">Fiche véhicule</b> : entretiens, vérifications (niveaux/pression), compteur, fiche technique, notes — tout est accessible depuis la fiche de chaque véhicule.</p>
-    <p style="margin-top:8px;"><b style="color:var(--t1);">Accueil / Échéances</b> : regroupent les alertes à venir, triées par urgence.</p>
-    <p style="margin-top:8px;"><b style="color:var(--t1);">Recherche</b> : l'icône loupe en haut de chaque écran cherche partout (véhicules, notes, entretiens, fiches techniques…).</p>
-    <p style="margin-top:8px;"><b style="color:var(--t1);">Raccourcis</b> : un appui long sur l'icône de l'app installée donne un accès direct à quelques actions (plein, compteur, vérification, échéances).</p>
-  `;
-  const sync_ = `
-    <p>La synchronisation sauvegarde tes données dans un dépôt GitHub <b style="color:var(--t1);">privé</b>, pour les retrouver sur tes autres appareils.</p>
-    <p style="margin-top:8px;">1. Crée un dépôt privé sur GitHub (ex. <code>pitstop-data</code>).</p>
-    <p style="margin-top:4px;">2. Crée un token : GitHub → Settings → Developer settings → Fine-grained tokens → limité à ce seul dépôt, droit <i>Contents: Read and write</i>.</p>
-    <p style="margin-top:4px;">3. Dans Réglages → Synchronisation, renseigne <code>utilisateur/nom-du-dépôt</code> et le token, puis « Activer la synchronisation ».</p>
-    <p style="margin-top:8px;">Ensuite c'est automatique : envoi après chaque modification, récupération à l'ouverture.</p>
-  `;
-  const notifs = `
-    <p>Les notifications reposent sur une tâche planifiée gratuite (GitHub Actions) sur le <b style="color:var(--t1);">même dépôt que ta synchronisation</b> — configure-la d'abord.</p>
-    <p style="margin-top:8px;">1. Dans Réglages → Notifications, clique « Activer les notifications » (accepte la permission demandée par le navigateur).</p>
-    <p style="margin-top:4px;">2. Télécharge les 3 fichiers proposés : les clés secrètes, <code>notify.yml</code> et <code>notify-check.js</code>.</p>
-    <p style="margin-top:4px;">3. Sur GitHub, dans ton dépôt de données → Settings → Secrets and variables → Actions : ajoute <code>VAPID_PUBLIC_KEY</code> et <code>VAPID_PRIVATE_KEY</code> avec les valeurs du fichier téléchargé.</p>
-    <p style="margin-top:4px;">4. Ajoute <code>notify-check.js</code> à la racine du dépôt, et <code>notify.yml</code> dans un dossier <code>.github/workflows/</code> (à créer).</p>
-    <p style="margin-top:4px;">5. Committe ces fichiers. La tâche tourne ensuite chaque jour automatiquement (tu peux aussi la lancer manuellement depuis l'onglet Actions du dépôt).</p>
-    <p style="margin-top:8px;color:var(--t3);">Un seul appareil actif à la fois pour l'instant : réactiver sur un autre appareil remplace l'inscription précédente.</p>
-  `;
+  const icUsage = `<svg width="17" height="17" viewBox="0 0 18 18" fill="none"><path d="M2.5 4a1.5 1.5 0 0 1 1.5-1.5h3A1.5 1.5 0 0 1 8.5 4v3A1.5 1.5 0 0 1 7 8.5H4A1.5 1.5 0 0 1 2.5 7V4zM11.5 4A1.5 1.5 0 0 1 13 2.5h2A1.5 1.5 0 0 1 16.5 4v3A1.5 1.5 0 0 1 15 8.5h-2A1.5 1.5 0 0 1 11.5 7V4zM2.5 12A1.5 1.5 0 0 1 4 10.5h2A1.5 1.5 0 0 1 7.5 12v2A1.5 1.5 0 0 1 6 15.5H4A1.5 1.5 0 0 1 2.5 14v-2zM10.5 12a1.5 1.5 0 0 1 1.5-1.5h3a1.5 1.5 0 0 1 1.5 1.5v2a1.5 1.5 0 0 1-1.5 1.5h-3a1.5 1.5 0 0 1-1.5-1.5v-2z" fill="var(--accent)"/></svg>`;
+  const icSync = `<svg width="17" height="17" viewBox="0 0 16 16" fill="none"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9M13.5 2v3h-3" stroke="var(--accent)" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+  const icNotif = `<svg width="17" height="17" viewBox="0 0 16 16" fill="none"><path d="M4 6.5a4 4 0 0 1 8 0c0 3 1 4 1 4H3s1-1 1-4z" stroke="var(--accent)" stroke-width="1.3" stroke-linejoin="round"/><path d="M6.5 12.5a1.5 1.5 0 0 0 3 0" stroke="var(--accent)" stroke-width="1.3" stroke-linecap="round"/></svg>`;
+  const usage = helpCard(icUsage, 'Utilisation', 'Un aperçu rapide de l\'app.', [
+    '<b style="color:var(--t1);">Garage</b> : ajoute tes véhicules, bascule entre « Mes véhicules » et « Véhicules des autres » en haut de l\'écran.',
+    '<b style="color:var(--t1);">Fiche véhicule</b> : entretiens, vérifications, compteur, fiche technique, notes — tout est accessible depuis la fiche.',
+    '<b style="color:var(--t1);">Accueil / Échéances</b> : regroupent les alertes à venir, triées par urgence.',
+    '<b style="color:var(--t1);">Recherche</b> : l\'icône loupe cherche partout — véhicules, notes, entretiens, fiches techniques…',
+    '<b style="color:var(--t1);">Actions rapides</b> : en page d\'accueil, pour aller droit au but (plein, compteur, vérification).',
+  ]);
+  const sync_ = helpCard(icSync, 'Synchronisation', 'Sauvegarde tes données dans un dépôt GitHub <b style="color:var(--t1);">privé</b>, pour les retrouver sur tes autres appareils.', [
+    'Crée un dépôt privé sur GitHub (ex. <code>pitstop-data</code>).',
+    'Crée un token : GitHub → Settings → Developer settings → Fine-grained tokens → limité à ce seul dépôt, droit <i>Contents: Read and write</i>.',
+    'Dans Réglages → Synchronisation, renseigne <code>utilisateur/nom-du-dépôt</code> et le token, puis « Activer la synchronisation ».',
+  ], 'Ensuite c\'est automatique : envoi après chaque modification, récupération à l\'ouverture.');
+  const notifs = helpCard(icNotif, 'Notifications', 'Repose sur une tâche planifiée gratuite (GitHub Actions), sur le <b style="color:var(--t1);">même dépôt que ta synchronisation</b> — à configurer d\'abord.', [
+    'Dans Réglages → Notifications, « Activer les notifications » (accepte la permission du navigateur).',
+    'Télécharge les 3 fichiers proposés : les clés secrètes, <code>notify.yml</code> et <code>notify-check.js</code>.',
+    'Sur GitHub, dans ton dépôt de données → Settings → Secrets and variables → Actions → onglet <b style="color:var(--t1);">Secrets</b> (pas Variables, qui est en clair) → New repository secret. Ajoute <code>VAPID_PUBLIC_KEY</code> puis <code>VAPID_PRIVATE_KEY</code> avec les valeurs du fichier téléchargé.',
+    'Ajoute <code>notify-check.js</code> : Add file → Create new file → nomme-le <code>notify-check.js</code> (racine du dépôt) → colle son contenu.',
+    'Ajoute <code>notify.yml</code> : Add file → Create new file → tape <code>.github/workflows/notify.yml</code> comme nom (les dossiers se créent automatiquement) → colle son contenu.',
+    'Pour chaque fichier créé, descends en bas de page et clique le bouton vert <b style="color:var(--t1);">Commit changes</b> — c\'est l\'équivalent d\'enregistrer sur GitHub.',
+    'La tâche tourne ensuite chaque jour automatiquement (lançable aussi à la main depuis l\'onglet Actions → sélectionner le workflow → Run workflow).',
+  ], 'Un seul appareil actif à la fois pour l\'instant : réactiver sur un autre appareil remplace l\'inscription précédente.');
   return `<div class="modal-title">AIDE</div><div class="modal-desc">Utilisation de l'app, synchronisation et notifications.</div>
-    ${helpSection('Utilisation', usage)}
-    ${helpSection('Synchronisation entre appareils', sync_)}
-    ${helpSection('Notifications', notifs)}
-    <button class="btn btn-secondary" style="margin-top:18px;" onclick="closeModal()">Fermer</button>`;
+    ${usage}${sync_}${notifs}
+    <button class="btn btn-secondary" onclick="closeModal()">Fermer</button>`;
+}
+function modalChangelog(){
+  const cards = CHANGELOG.map(c=>`<div style="background:var(--bg-2);border:1px solid var(--b1);border-radius:var(--r-md);padding:14px 16px;margin-bottom:10px;">
+    <div style="font-family:var(--f-data);font-size:12px;color:var(--accent);font-weight:700;margin-bottom:6px;">v${c.v}</div>
+    <ul style="margin:0;padding-left:16px;">${c.items.map(it=>`<li style="font-size:12px;color:var(--t2);line-height:1.6;margin-bottom:3px;">${it}</li>`).join('')}</ul>
+  </div>`).join('');
+  return `<div class="modal-title">NOUVEAUTÉS</div><div class="modal-desc">Ce qui a changé, version par version.</div>
+    ${cards}
+    <button class="btn btn-secondary" onclick="closeModal()">Fermer</button>`;
 }
 function expenseYears(){
   const ys = new Set();
@@ -1101,6 +1176,9 @@ function plusBtn(){
 function searchBtn(){
   return `<button class="header-btn" style="background:var(--bg-4);" onclick="openModal('globalSearch')" aria-label="Rechercher"><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="7" cy="7" r="4.5" stroke="var(--t1)" stroke-width="1.5"/><line x1="10.3" y1="10.3" x2="14" y2="14" stroke="var(--t1)" stroke-width="1.5" stroke-linecap="round"/></svg></button>`;
 }
+function helpBtn(){
+  return `<button class="header-btn" style="background:var(--bg-4);" onclick="openModal('help')" aria-label="Aide"><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6" stroke="var(--t1)" stroke-width="1.4"/><path d="M6.2 6.3a1.8 1.8 0 1 1 2.6 1.6c-.5.3-.8.6-.8 1.2v.3" stroke="var(--t1)" stroke-width="1.4" stroke-linecap="round"/><circle cx="8" cy="11.3" r="0.75" fill="var(--t1)"/></svg></button>`;
+}
 
 /* ── NARROW (téléphone + iPad portrait) ── */
 function renderNarrow(){
@@ -1119,7 +1197,7 @@ function narrowHeaderHtml(){
   }
   if(state.tab==='home'){
     const greet = settings.name ? `Bonjour ${settings.name}, voici ton parc` : 'Le suivi de ton parc auto';
-    return `<div class="header"><div><div class="header-title"><span>PITSTOP</span> <span style="color:var(--accent);">MANAGER</span></div><div class="header-sub">${greet}</div></div>${searchBtn()}</div>`;
+    return `<div class="header"><div><div class="header-title"><span>PITSTOP</span> <span style="color:var(--accent);">MANAGER</span></div><div class="header-sub">${greet}</div></div><div style="display:flex;gap:8px;">${helpBtn()}${searchBtn()}</div></div>`;
   }
   if(state.tab==='garage'){
     return `<div class="header"><div><div class="header-title">MON GARAGE</div><div class="header-sub">${vehicles.filter(v=>v.status!=='sold').length} véhicule(s) actif(s)</div></div><div style="display:flex;gap:8px;">${searchBtn()}${plusBtn()}</div></div>`;
@@ -1154,7 +1232,7 @@ function renderWide(){
   const hd = headerMeta(t);
   return `<div class="layout-wide">${sidebarHtml()}
     <main class="main">
-      <div class="main-header"><div><div class="header-title">${hd.title}</div><div class="header-sub">${hd.sub}</div></div><div style="display:flex;gap:8px;">${searchBtn()}${hd.add?plusBtn():''}</div></div>
+      <div class="main-header"><div><div class="header-title">${hd.title}</div><div class="header-sub">${hd.sub}</div></div><div style="display:flex;gap:8px;">${t==='home'?helpBtn():''}${searchBtn()}${hd.add?plusBtn():''}</div></div>
       ${body}
     </main></div>`;
 }
@@ -1165,7 +1243,7 @@ function sidebarHtml(){
     const attr = it.filled ? (active?`fill="${col}"`:`fill="none" stroke="${col}" stroke-width="1.4"`) : `stroke="${col}" stroke-width="1.4" fill="none" stroke-linejoin="round" stroke-linecap="round"`;
     return `<button class="side-item ${active?'active':''}" onclick="switchTab('${it.id}')"><svg width="19" height="19" viewBox="0 0 18 19" ${attr}>${it.svg}</svg><span>${it.label}</span></button>`;
   }).join('');
-  return `<aside class="sidebar"><div class="side-logo"><span>PITSTOP</span> <span style="color:var(--accent);">MANAGER</span></div><nav class="side-nav">${links}</nav><div class="side-foot">v2.0 · données locales <span class="help-icon" onclick="openModal('help')" title="Aide">?</span></div></aside>`;
+  return `<aside class="sidebar"><div class="side-logo"><span>PITSTOP</span> <span style="color:var(--accent);">MANAGER</span></div><nav class="side-nav">${links}</nav><div class="side-foot">v${APP_VERSION} · données locales <span class="help-icon" onclick="openModal('changelog')" title="Nouveautés">i</span></div></aside>`;
 }
 function headerMeta(t){
   if(t==='home'){ const greet = settings.name ? `Bonjour ${settings.name}` : 'Ton parc'; return {title:greet, sub:'Vue d\'ensemble de ton parc'}; }
@@ -1266,6 +1344,13 @@ function viewHome(){
     <div class="stat"><div class="stat-icon" style="background:var(--accent-dim);"><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2.6 7.6V3.4a1 1 0 0 1 1-1h4.1l5.9 5.9a1 1 0 0 1 0 1.4l-3.7 3.7a1 1 0 0 1-1.4 0L2.6 7.6z" stroke="var(--accent)" stroke-width="1.3" stroke-linejoin="round"/><circle cx="5.4" cy="5.4" r="1" fill="var(--accent)"/></svg></div><div class="stat-val">${forSale.length}</div><div class="stat-label">En vente</div></div>
     <div class="stat"><div class="stat-icon" style="background:var(--ok-dim);"><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M11.5 4.6a4 4 0 1 0 0 6.8" stroke="var(--ok)" stroke-width="1.4" stroke-linecap="round"/><path d="M3.4 7h6M3.4 9.2h5.2" stroke="var(--ok)" stroke-width="1.4" stroke-linecap="round"/></svg></div><div class="stat-val">${fmt(totalValue/1000)}<span class="unit">k €</span></div><div class="stat-label">Valeur estimée</div></div>
   </div>`;
+  html += `<div class="sec-title">Actions rapides</div>
+    <div class="quick-actions">
+      <button class="quick-action" onclick="quickAction('addFuel')"><span class="quick-action-ic">${icon('fuel','var(--accent)')}</span>Plein</button>
+      <button class="quick-action" onclick="quickAction('logUsage')"><span class="quick-action-ic">${icon('other','var(--accent)')}</span>Compteur</button>
+      <button class="quick-action" onclick="quickAction('addCheck')"><span class="quick-action-ic">${icon('drop','var(--accent)')}</span>Vérification</button>
+      <button class="quick-action" onclick="quickAction('echeances')"><span class="quick-action-ic">${icon('date','var(--accent)')}</span>Échéances</button>
+    </div>`;
   html += `<div class="sec-title">Alertes & échéances ${alerts.length?`<span class="sec-link" onclick="switchTab('echeances')">Tout voir</span>`:''}</div>`;
   if(alerts.length){ html += alerts.slice(0,4).map(a=>alertRow(a)).join(''); }
   else { html += `<div class="empty">Tout ton parc est à jour, aucune alerte.</div>`; }
@@ -1758,7 +1843,7 @@ function viewProfil(){
       ${notif.lastError?`<div style="font-size:11px;color:var(--danger);margin-top:8px;">${escapeHtml(notif.lastError)}</div>`:''}
     `}
 
-    <div style="text-align:center;margin-top:24px;"><div style="font-family:var(--f-display);font-size:18px;font-weight:800;letter-spacing:0.04em;color:var(--t3);">PITSTOP <span style="color:var(--accent);">MANAGER</span></div><div style="font-family:var(--f-data);font-size:10px;color:var(--t3);letter-spacing:0.12em;margin-top:3px;">v2.0 <span class="help-icon" onclick="openModal('help')" title="Aide">?</span></div></div>
+    <div style="text-align:center;margin-top:24px;"><div style="font-family:var(--f-display);font-size:18px;font-weight:800;letter-spacing:0.04em;color:var(--t3);">PITSTOP <span style="color:var(--accent);">MANAGER</span></div><div style="font-family:var(--f-data);font-size:10px;color:var(--t3);letter-spacing:0.12em;margin-top:3px;">v${APP_VERSION} <span class="help-icon" onclick="openModal('changelog')" title="Nouveautés">i</span></div></div>
   </div>`;
 }
 
@@ -1805,6 +1890,7 @@ function renderModal(){
     case 'globalSearch':    inner = modalGlobalSearch(); break;
     case 'consistency':     inner = modalConsistency(); break;
     case 'help':             inner = modalHelp(); break;
+    case 'changelog':        inner = modalChangelog(); break;
   }
   m.innerHTML = `<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal"><div class="modal-handle"></div>${inner}</div></div>`;
 }
@@ -2867,9 +2953,10 @@ function downloadTextFile(filename, text, mime){
   }catch(e){ toast('Téléchargement impossible : '+e.message); }
 }
 function downloadNotifSecrets(){
-  const content = `Clés VAPID — PitStop Manager\n` +
-`À ajouter comme secrets du dépôt GitHub (Settings > Secrets and variables > Actions > New repository secret),\n` +
-`sur le dépôt qui contient ton backup.json (celui de la synchronisation).\n\n` +
+  const content = `Clés VAPID — PitStop Manager\n\n` +
+`Où les ajouter : sur GitHub, dans le dépôt qui contient ton backup.json (celui de la synchronisation) ->\n` +
+`Settings > Secrets and variables > Actions > onglet "Secrets" (PAS l'onglet "Variables", qui stocke en clair)\n` +
+`> New repository secret.\n\n` +
 `Nom du secret : VAPID_PUBLIC_KEY\nValeur : ${notif.publicKey}\n\n` +
 `Nom du secret : VAPID_PRIVATE_KEY\nValeur : ${notif.privateKey}\n\n` +
 `Ne partage jamais ce fichier ni la clé privée : quiconque la possède peut envoyer des notifications à ta place.`;
@@ -2885,11 +2972,14 @@ function handleShortcutAction(){
   const action = params.get('action');
   if(!action) return;
   if(typeof history!=='undefined' && history.replaceState){ history.replaceState(null, '', location.pathname); }
-  if(action==='echeances'){ state.tab='echeances'; state.vehicleId=null; render(); return; }
+  quickAction(action);
+}
+function quickAction(action){
+  if(action==='echeances'){ switchTab('echeances'); return; }
   const eligible = vehicles.filter(v=>v.status!=='sold');
-  if(!eligible.length){ state.tab='garage'; render(); toast('Ajoute un véhicule pour utiliser ce raccourci.'); return; }
+  if(!eligible.length){ state.tab='garage'; render(); toast('Ajoute un véhicule pour utiliser cette action.'); return; }
   if(eligible.length===1){ runShortcutAction(action, eligible[0].id); return; }
-  state.tab='garage'; state.pendingShortcut = action; render();
+  state.pendingShortcut = action;
   openModal('pickVehicleShortcut', {});
 }
 function runShortcutAction(action, vehicleId){
