@@ -273,8 +273,12 @@
 <script>
 /* ════════════ CATEGORIES ════════════ */
 const CAT = { voiture:'Voiture', moto:'Moto', cyclomoteur:'Cyclomoteur', autre:'Autre' };
-const APP_VERSION = '2.0.3';
+const APP_VERSION = '2.0.4';
 const CHANGELOG = [
+  { v:'2.0.4', items:[
+    'Correction : le compteur actuel ne restait plus à zéro après suppression de tous les relevés et pleins d\'un véhicule.',
+    'Suppression d\'un plein : nettoie aussi les points du graphique devenus incohérents.',
+  ]},
   { v:'2.0.3', items:[
     'Actions rapides : retrait d\'Échéances (déjà accessible depuis la barre de navigation).',
     'Fenêtres : fermeture possible en glissant vers le bas, en plus du bouton Fermer.',
@@ -2520,7 +2524,14 @@ function saveEditFuel(){
 }
 function deleteFuel(vid, fid){
   const v=byId(vid); const f=v.fuelLogs.find(x=>x.id===fid);
-  confirmDialog('Supprimer le plein', 'Ce plein sera supprimé et le compteur ajusté.', 'Supprimer', ()=>{ v.usage=Math.max(0, v.usage-(f?f.distance:0)); v.fuelLogs=v.fuelLogs.filter(x=>x.id!==fid); save(); render(); toast('Plein supprimé'); });
+  confirmDialog('Supprimer le plein', 'Ce plein sera supprimé et le compteur ajusté.', 'Supprimer', ()=>{
+    v.usage=Math.max(0, v.usage-(f?f.distance:0));
+    v.fuelLogs=v.fuelLogs.filter(x=>x.id!==fid);
+    /* retire les points du compteur devenus incohérents (au-dessus du nouveau compteur) */
+    v.usageLog = (v.usageLog||[]).filter(e=>e.value<=v.usage);
+    if(!v.usageLog.length) v.usage = 0;
+    save(); render(); toast('Plein supprimé');
+  });
 }
 
 /* relevé compteur */
@@ -2536,6 +2547,8 @@ function deleteUsageEntry(vid, entryId){
     if(v.usageLog.length){
       const latest = [...v.usageLog].sort((a,b)=> new Date(b.date)-new Date(a.date))[0];
       v.usage = latest.value;
+    } else {
+      v.usage = 0; // plus aucun relevé -> le compteur affiché repart de zéro
     }
     save();
     if(v.usageLog.length){ render(); openModal('usageAll',{vehicleId:vid}); }
