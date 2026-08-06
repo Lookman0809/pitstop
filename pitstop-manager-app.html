@@ -273,8 +273,16 @@
 <script>
 /* ════════════ CATEGORIES ════════════ */
 const CAT = { voiture:'Voiture', moto:'Moto', cyclomoteur:'Cyclomoteur', autre:'Autre' };
-const APP_VERSION = '2.0.4';
+const APP_VERSION = '2.1.0';
 const CHANGELOG = [
+  { v:'2.1.0', items:[
+    'Entretiens libres (batterie, soufflet de cardan…), indépendants des préconisations, avec suggestion + case à cocher pour mettre à jour les préconisations concernées.',
+    'Référence de pièce et numéro de facture sur chaque entretien.',
+    'Section « Entretiens » regroupée par date, séparée de « Préconisations ».',
+    'Statuts sur les notes (À faire / En cours / Résolu / Surveillance) et rattachement optionnel à un entretien.',
+    'Fiche de vente : option pour afficher l\'ancienneté en km de chaque entretien (jamais de montant).',
+    'Nouveau : export complet de l\'historique d\'entretien (texte, sans montant).',
+  ]},
   { v:'2.0.4', items:[
     'Correction : le compteur actuel ne restait plus à zéro après suppression de tous les relevés et pleins d\'un véhicule.',
     'Suppression d\'un plein : nettoie aussi les points du graphique devenus incohérents.',
@@ -351,6 +359,9 @@ const CATMAP = { voiture:'voiture', moto:'moto', motocross:'moto', cyclomoteur:'
 const catLabel = v => CAT[v.category] || 'Autre';
 
 /* ════════════ VÉRIFICATIONS (niveaux, pression…) ════════════ */
+const NOTE_STATUS = [['todo','À faire'],['inprogress','En cours'],['resolved','Résolu'],['watch','Surveillance']];
+const NOTE_STATUS_LABEL = Object.fromEntries(NOTE_STATUS);
+const NOTE_STATUS_COLOR = { todo:'info', inprogress:'warn', resolved:'ok', watch:'danger' };
 const BUILTIN_CHECK_ITEMS = [
   {key:'oil', label:'Huile moteur', mode:'level'},
   {key:'coolant', label:'Liquide de refroidissement', mode:'level'},
@@ -536,8 +547,9 @@ function migrate(){
     if(v.ownerName===undefined || v.ownerName===null) v.ownerName = '';
     if(!v.usageLog.length) v.usageLog.push({id:++nextId, date:todayISO(), value:v.usage||0});
     v.recos.forEach(r=>{ if(r.intervalMonths===undefined) r.intervalMonths=null; if(r.interval===undefined) r.interval=null; });
-    v.history.forEach(h=>{ if(h.cost==null) h.cost=0; });
+    v.history.forEach(h=>{ if(h.cost==null) h.cost=0; if(h.partRef==null) h.partRef=''; if(h.invoiceRef==null) h.invoiceRef=''; });
     v.fuelLogs.forEach(f=>{ if(f.cost==null) f.cost=0; });
+    v.notes.forEach(n=>{ if(!NOTE_STATUS_LABEL[n.status]) n.status='todo'; if(n.historyId===undefined) n.historyId=null; });
     /* vérifications : items intégrés + préservation d'anciennes entrées "Autre" */
     if(!v.checkItems){
       v.checkItems = BUILTIN_CHECK_ITEMS.map(it=>({key:it.key, label:it.label, mode:it.mode, custom:false, recurrenceMonths:null}));
@@ -1113,11 +1125,16 @@ function checksSection(v){
 function notesSection(v){
   const list = [...(v.notes||[])].sort((a,b)=> new Date(b.date)-new Date(a.date));
   if(!list.length) return `<div class="empty">Aucune note. Ajoute un rappel libre (bruit inhabituel, à surveiller…).</div>`;
-  return list.map(n=>`<div class="row">
+  return list.map(n=>{
+    const st = n.status || 'todo';
+    const linked = n.historyId ? v.history.find(h=>h.id===n.historyId) : null;
+    const sub = [fmtDate(n.date), linked?`lié à « ${linked.name} »`:''].filter(Boolean).join(' · ');
+    return `<div class="row tap" onclick="openModal('editNote',{vehicleId:${v.id},noteId:${n.id}})">
     <div class="row-icon" style="background:var(--bg-4);">${icon('other','var(--t2)')}</div>
-    <div class="row-body"><div class="row-name">${escapeHtml(n.text)}</div><div class="row-sub">${fmtDate(n.date)}</div></div>
-    <button class="icon-del" onclick="deleteNote(${v.id},${n.id})" aria-label="Supprimer">${trashSvg}</button>
-  </div>`).join('');
+    <div class="row-body"><div class="row-name">${escapeHtml(n.text)}</div><div class="row-sub">${sub}</div></div>
+    <span class="badge ${NOTE_STATUS_COLOR[st]}"><span class="dot"></span>${NOTE_STATUS_LABEL[st]}</span>
+  </div>`;
+  }).join('');
 }
 const SPEC_SUGGESTIONS = ['Capacité huile moteur','Capacité huile boîte','Capacité huile de pont','Capacité liquide de refroidissement','Pression pneus avant (solo)','Pression pneus avant (chargé)','Pression pneus arrière (solo)','Pression pneus arrière (chargé)','Couple de serrage roues','Carburant recommandé'];
 function specsSection(v){
@@ -1147,10 +1164,24 @@ function fuelRow(v, f, sortedDesc, i){
   </div>`;
 }
 function historyRow(v, h){
+  const refs = [h.partRef, h.invoiceRef?`Facture ${h.invoiceRef}`:''].filter(Boolean).join(' · ');
   return `<div class="row tap" onclick="openModal('historyActions',{vehicleId:${v.id},historyId:${h.id}})">
     <div class="row-icon" style="background:var(--bg-4);">${icon(h.type,'var(--t2)')}</div>
-    <div class="row-body"><div class="row-name">${h.name}</div><div class="row-sub">${fmtDate(h.date)} · à ${fmt(h.doneAt)} ${h.unit}</div></div>
+    <div class="row-body"><div class="row-name">${h.name}</div><div class="row-sub">${fmtDate(h.date)} · à ${fmt(h.doneAt)} ${h.unit}${refs?' · '+escapeHtml(refs):''}</div></div>
     ${h.cost>0?`<div style="font-family:var(--f-data);font-size:12px;color:var(--t1);">${fmtPrice(h.cost)}</div>`:`<span style="color:var(--ok);">${checkSvg}</span>`}
+  </div>`;
+}
+function groupHistoryByDate(v){
+  const groups = {};
+  (v.history||[]).forEach(h=>{ (groups[h.date] = groups[h.date] || []).push(h); });
+  return Object.keys(groups).sort((a,b)=> new Date(b)-new Date(a)).map(date=>({date, entries:groups[date]}));
+}
+function historyDayRow(v, group){
+  const names = group.entries.map(h=>h.name).join(', ');
+  return `<div class="row tap" onclick="openModal('historyDay',{vehicleId:${v.id},date:'${group.date}'})">
+    <div class="row-icon" style="background:var(--bg-4);">${icon('other','var(--t2)')}</div>
+    <div class="row-body"><div class="row-name">${fmtDate(group.date)}${group.entries.length>1?` · ${group.entries.length} opérations`:''}</div><div class="row-sub" style="text-transform:none;letter-spacing:0;">${escapeHtml(names)}</div></div>
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M5 3l4 4-4 4" stroke="var(--t3)" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
   </div>`;
 }
 
@@ -1586,8 +1617,8 @@ function viewDetail(id){
   html += tcoSection(v);
   }
 
-  /* entretiens / préconisations */
-  html += `<div class="sec-title">Entretiens & préconisations</div>`;
+  /* préconisations */
+  html += `<div class="sec-title">Préconisations</div>`;
   if(v.recos.length){
     html += v.recos.map(r=>{
       const rs = recoStatus(r,v); const c = SC[rs.s];
@@ -1600,13 +1631,14 @@ function viewDetail(id){
   } else { html += `<div class="empty">Aucune préconisation. Ajoute-en une (ex : vidange tous les 10 000 km).</div>`; }
   html += addBtn('Ajouter une préconisation', `openModal('addReco',{vehicleId:${v.id}})`);
 
-  /* historique */
+  /* entretiens (regroupés par date) */
+  html += `<div class="sec-title">Entretiens</div>`;
   if(v.history.length){
-    const hist = [...v.history].sort((a,b)=>new Date(b.date)-new Date(a.date));
-    html += `<div class="sec-title">Historique des entretiens</div>`;
-    html += hist.slice(0,3).map(h=>historyRow(v,h)).join('');
-    html += `<div style="text-align:right;margin-top:8px;"><span class="sec-link" onclick="openModal('historyAll',{vehicleId:${v.id}})">${v.history.length>3?`Voir tout l'historique (${v.history.length})`:'Voir les dépenses'} →</span></div>`;
-  }
+    const groups = groupHistoryByDate(v);
+    html += groups.slice(0,3).map(g=>historyDayRow(v,g)).join('');
+    if(groups.length>3){ html += `<div style="text-align:right;margin-top:8px;"><span class="sec-link" onclick="openModal('historyAll',{vehicleId:${v.id}})">Voir tout l'historique (${groups.length} jours) →</span></div>`; }
+  } else { html += `<div class="empty">Aucun entretien enregistré.</div>`; }
+  html += addBtn('Ajouter un entretien', `openModal('addHistory',{vehicleId:${v.id}})`);
 
   /* échéances */
   html += `<div class="sec-title">Échéances</div>`;
@@ -1631,6 +1663,7 @@ function viewDetail(id){
   html += `<div style="margin-top:24px;">`;
   html += `<button class="btn btn-secondary" onclick="openModal('editVehicle',{vehicleId:${v.id}})">${editSvg}Modifier le véhicule</button>`;
   html += `<button class="btn btn-secondary" style="margin-top:10px;" onclick="exportVehiclePdf(${v.id})"><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M4 1.5h5l3 3V14a.5.5 0 0 1-.5.5h-7A.5.5 0 0 1 4 14V1.5z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/><path d="M9 1.5v3h3" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>Exporter en PDF</button>`;
+  html += `<button class="btn btn-secondary" style="margin-top:10px;" onclick="openModal('exportHistory',{vehicleId:${v.id}})"><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 2v8m0 0l-3-3m3 3l3-3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/><path d="M2.5 11v2a1 1 0 0 0 1 1h9a1 1 0 0 0 1-1v-2" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>Exporter l'historique</button>`;
   if(isMine){
   html += `<button class="btn btn-secondary" style="margin-top:10px;" onclick="openModal('saleListing',{vehicleId:${v.id}})"><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2.6 7.6V3.4a1 1 0 0 1 1-1h4.1l5.9 5.9a1 1 0 0 1 0 1.4l-3.7 3.7a1 1 0 0 1-1.4 0L2.6 7.6z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/><circle cx="5.4" cy="5.4" r="1" fill="currentColor"/></svg>Générer une annonce de vente</button>`;
   if(v.status==='owned'){
@@ -1888,6 +1921,9 @@ function renderModal(){
     case 'historyActions':  inner = modalHistoryActions(); break;
     case 'editHistory':     inner = modalEditHistory(); break;
     case 'historyAll':      inner = modalHistoryAll(); break;
+    case 'addHistory':      inner = modalAddHistory(); break;
+    case 'historyDay':      inner = modalHistoryDay(); break;
+    case 'exportHistory':   inner = modalExportHistory(); break;
     case 'fuelAll':         inner = modalFuelAll(); break;
     case 'export':          inner = modalExport(); break;
     case 'import':          inner = modalImport(); break;
@@ -1900,6 +1936,7 @@ function renderModal(){
     case 'addCheckItem':    inner = modalAddCheckItem(); break;
     case 'editCheckItem':   inner = modalEditCheckItem(); break;
     case 'addNote':         inner = modalAddNote(); break;
+    case 'editNote':        inner = modalEditNote(); break;
     case 'addSpec':         inner = modalAddSpec(); break;
     case 'editSpec':        inner = modalEditSpec(); break;
     case 'compareVehicles': inner = modalCompareVehicles(); break;
@@ -2077,18 +2114,55 @@ function modalEditHistory(){
     <div class="field-row"><div class="field"><label class="field-label">Effectué à (${u})</label><input id="f-hat" class="mono" inputmode="numeric" value="${h.doneAt}"></div>
       <div class="field"><label class="field-label">Coût (€)</label><input id="f-hcost" class="mono" inputmode="numeric" value="${h.cost||0}"></div></div>
     <div class="field"><label class="field-label">Date</label><input id="f-hdate" type="date" class="mono" value="${h.date}"></div>
+    <div class="field-row"><div class="field"><label class="field-label">Référence pièce <span style="color:var(--t3);">(opt.)</span></label><input id="f-hpart" value="${escapeHtml(h.partRef||'')}"></div>
+      <div class="field"><label class="field-label">N° de facture <span style="color:var(--t3);">(opt.)</span></label><input id="f-hinvoice" value="${escapeHtml(h.invoiceRef||'')}"></div></div>
     <div class="btn-row"><button class="btn btn-secondary" onclick="openModal('historyActions',{vehicleId:${v.id},historyId:${h.id}})">Retour</button><button class="btn btn-primary" onclick="saveEditHistory()">Enregistrer</button></div>`;
+}
+function modalAddHistory(){
+  const v = byId(state.ctx.vehicleId); const u = unitL(v);
+  const type = state.draft.historyType || 'other';
+  const types = [['oil','Vidange'],['brake','Freins'],['tire','Pneus'],['belt','Courroie'],['filter','Filtre'],['other','Autre']];
+  const suggested = v.recos.filter(r=>r.type===type).map(r=>r.id);
+  const recoRows = v.recos.map(r=>`<label style="display:flex;align-items:center;gap:9px;padding:9px 2px;border-bottom:1px solid var(--b1);font-size:12.5px;color:var(--t1);">
+    <input type="checkbox" id="reco-chk-${r.id}" ${suggested.includes(r.id)?'checked':''} style="width:16px;height:16px;flex-shrink:0;">
+    ${escapeHtml(r.name)}${suggested.includes(r.id)?' <span style="color:var(--accent);font-size:10.5px;">(suggéré)</span>':''}
+  </label>`).join('');
+  return `<div class="modal-title">NOUVEL ENTRETIEN</div><div class="modal-desc">Un entretien réalisé, indépendant d'une préconisation (ex : soufflet de cardan, batterie…).</div>
+    <div class="field"><label class="field-label">Type</label><div class="chips">${types.map(t=>`<div class="chip ${type===t[0]?'active':''}" onclick="pickChip('historyType','${t[0]}',this)">${t[1]}</div>`).join('')}</div></div>
+    <div class="field"><label class="field-label">Intitulé</label><input id="f-newhname" placeholder="ex : Soufflet de cardan"></div>
+    <div class="field-row"><div class="field"><label class="field-label">Effectué à (${u})</label><input id="f-newhat" class="mono" inputmode="numeric" value="${v.usage}"></div>
+      <div class="field"><label class="field-label">Coût (€) <span style="color:var(--t3);">(opt.)</span></label><input id="f-newhcost" class="mono" inputmode="numeric" placeholder="0"></div></div>
+    <div class="field"><label class="field-label">Date</label><input id="f-newhdate" type="date" class="mono" value="${todayISO()}"></div>
+    <div class="field-row"><div class="field"><label class="field-label">Référence pièce <span style="color:var(--t3);">(opt.)</span></label><input id="f-newhpart" placeholder="ex : filtre Bosch F123"></div>
+      <div class="field"><label class="field-label">N° de facture <span style="color:var(--t3);">(opt.)</span></label><input id="f-newhinvoice" placeholder="ex : FAC001"></div></div>
+    ${v.recos.length?`<div class="field"><label class="field-label">Mettre à jour ces préconisations</label>${recoRows}</div>`:''}
+    <div class="btn-row"><button class="btn btn-secondary" onclick="closeModal()">Annuler</button><button class="btn btn-primary" onclick="saveHistoryEntry()">Ajouter</button></div>`;
+}
+function modalHistoryDay(){
+  const v = byId(state.ctx.vehicleId); const date = state.ctx.date;
+  const entries = (v.history||[]).filter(h=>h.date===date);
+  return `<div class="modal-title">${fmtDate(date).toUpperCase()}</div><div class="modal-desc">${entries.length} opération${entries.length>1?'s':''} ce jour-là</div>
+    ${entries.map(h=>historyRow(v,h)).join('')}
+    <button class="btn btn-secondary" style="margin-top:14px;" onclick="closeModal()">Fermer</button>`;
 }
 function modalHistoryAll(){
   const v = byId(state.ctx.vehicleId);
-  const list = [...v.history].sort((a,b)=> new Date(b.date)-new Date(a.date));
+  const groups = groupHistoryByDate(v);
   const totalCost = v.history.reduce((s,h)=>s+(h.cost||0),0);
-  return `<div class="modal-title">HISTORIQUE</div><div class="modal-desc">${vehTitle(v)} · ${list.length} opération(s) · ${fmtPrice(totalCost)} dépensés</div>
+  return `<div class="modal-title">HISTORIQUE</div><div class="modal-desc">${vehTitle(v)} · ${v.history.length} opération(s) sur ${groups.length} jour(s) · ${fmtPrice(totalCost)} dépensés</div>
     <div class="sec-title" style="margin-top:0;">Dépenses par type</div>
     ${donutSVG(expenseByType(v))}
-    <div class="sec-title">Toutes les opérations</div>
-    ${list.length?list.map(h=>historyRow(v,h)).join(''):`<div class="empty">Aucun entretien.</div>`}
+    <div class="sec-title">Tous les entretiens</div>
+    ${groups.length?groups.map(g=>historyDayRow(v,g)).join(''):`<div class="empty">Aucun entretien.</div>`}
     <button class="btn btn-secondary" style="margin-top:16px;" onclick="closeModal()">Fermer</button>`;
+}
+function modalExportHistory(){
+  const v = byId(state.ctx.vehicleId);
+  const txt = buildHistoryExport(v);
+  return `<div class="modal-title">EXPORTER L'HISTORIQUE</div><div class="modal-desc">Liste complète des entretiens de ${vehTitle(v)}, sans montant — pratique pour un garagiste ou un repreneur.</div>
+    <div class="btn-row" style="margin-top:0;"><button class="btn btn-primary" onclick="exportHistoryCopy()">Copier</button><button class="btn btn-secondary" onclick="exportHistoryDownload()">Télécharger .txt</button></div>
+    <div class="field" style="margin-top:14px;"><textarea id="history-export-ta" readonly style="height:220px;resize:none;font-family:var(--f-data);font-size:10.5px;color:var(--t2);line-height:1.6;">${escapeHtml(txt)}</textarea></div>
+    <button class="btn btn-secondary" onclick="closeModal()">Fermer</button>`;
 }
 function modalFuelAll(){
   const v = byId(state.ctx.vehicleId);
@@ -2204,11 +2278,31 @@ function modalEditCheckItem(){
     <div class="btn-row"><button class="btn btn-secondary" onclick="closeModal()">Annuler</button><button class="btn btn-primary" onclick="saveCheckItemEdit()">Enregistrer</button></div>
     ${item.custom?`<button class="btn btn-danger" style="margin-top:10px;" onclick="deleteCheckItem(${v.id},'${item.key}')">${trashSvg}Supprimer cet élément</button>`:''}`;
 }
+function historyOptionsHtml(v, selectedId){
+  const entries = [...v.history].sort((a,b)=> new Date(b.date)-new Date(a.date)).slice(0,30);
+  return `<option value="">— Aucun —</option>` + entries.map(h=>`<option value="${h.id}" ${selectedId==h.id?'selected':''}>${escapeHtml(h.name)} · ${fmtDate(h.date)}</option>`).join('');
+}
 function modalAddNote(){
+  const v = byId(state.ctx.vehicleId);
+  const status = state.draft.noteStatus || 'todo';
   return `<div class="modal-title">NOUVELLE NOTE</div><div class="modal-desc">Un rappel libre, daté (bruit inhabituel, point à surveiller…).</div>
     <div class="field"><label class="field-label">Note</label><textarea id="f-notetext" placeholder="ex : léger bruit au freinage à surveiller" style="height:90px;resize:none;"></textarea></div>
+    <div class="field"><label class="field-label">Statut</label><div class="chips">${NOTE_STATUS.map(s=>`<div class="chip ${status===s[0]?'active':''}" onclick="pickChip('noteStatus','${s[0]}',this)">${s[1]}</div>`).join('')}</div></div>
     <div class="field"><label class="field-label">Date</label><input id="f-notedate" type="date" class="mono" value="${todayISO()}"></div>
+    ${v.history.length?`<div class="field"><label class="field-label">Rattacher à un entretien <span style="color:var(--t3);">(opt.)</span></label><select id="f-notehistory">${historyOptionsHtml(v,null)}</select></div>`:''}
     <div class="btn-row"><button class="btn btn-secondary" onclick="closeModal()">Annuler</button><button class="btn btn-primary" onclick="saveNote()">Ajouter</button></div>`;
+}
+function modalEditNote(){
+  const v = byId(state.ctx.vehicleId); const n = (v.notes||[]).find(x=>x.id===state.ctx.noteId);
+  if(!n) return `<div class="modal-title">NOTE</div><div class="empty">Introuvable.</div><button class="btn btn-secondary" onclick="closeModal()">Fermer</button>`;
+  const status = state.draft.noteStatus || n.status || 'todo';
+  return `<div class="modal-title">MODIFIER LA NOTE</div>
+    <div class="field"><label class="field-label">Note</label><textarea id="f-notetext2" style="height:90px;resize:none;">${escapeHtml(n.text)}</textarea></div>
+    <div class="field"><label class="field-label">Statut</label><div class="chips">${NOTE_STATUS.map(s=>`<div class="chip ${status===s[0]?'active':''}" onclick="pickChip('noteStatus','${s[0]}',this)">${s[1]}</div>`).join('')}</div></div>
+    <div class="field"><label class="field-label">Date</label><input id="f-notedate2" type="date" class="mono" value="${n.date}"></div>
+    ${v.history.length?`<div class="field"><label class="field-label">Rattacher à un entretien <span style="color:var(--t3);">(opt.)</span></label><select id="f-notehistory2">${historyOptionsHtml(v,n.historyId)}</select></div>`:''}
+    <div class="btn-row"><button class="btn btn-secondary" onclick="closeModal()">Annuler</button><button class="btn btn-primary" onclick="saveEditNote()">Enregistrer</button></div>
+    <button class="btn btn-danger" style="margin-top:10px;" onclick="deleteNote(${v.id},${n.id})">${trashSvg}Supprimer</button>`;
 }
 function modalAddSpec(){
   const used = new Set((byId(state.ctx.vehicleId).specs||[]).map(s=>s.label));
@@ -2266,12 +2360,18 @@ function modalCompareVehicles(){
 }
 function modalSaleListing(){
   const v = byId(state.ctx.vehicleId);
-  const txt = buildSaleListing(v);
+  const includeAge = !!state.draft.saleIncludeAge;
+  const txt = buildSaleListing(v, includeAge);
   return `<div class="modal-title">FICHE DE VENTE</div><div class="modal-desc">Annonce générée à partir de la fiche, prête à publier. Modifie-la si besoin avant de copier.</div>
+    <label style="display:flex;align-items:center;gap:9px;font-size:12.5px;color:var(--t1);margin-bottom:12px;">
+      <input type="checkbox" id="sale-age-toggle" ${includeAge?'checked':''} onchange="toggleSaleAge(this.checked)" style="width:16px;height:16px;">
+      Indiquer l'ancienneté en km de chaque entretien
+    </label>
     <div class="btn-row" style="margin-top:0;"><button class="btn btn-primary" onclick="saleCopy()">Copier l'annonce</button></div>
     <div class="field" style="margin-top:14px;"><textarea id="sale-ta" style="height:240px;resize:none;font-family:var(--f-body);font-size:12.5px;line-height:1.5;">${escapeHtml(txt)}</textarea></div>
     <button class="btn btn-secondary" onclick="closeModal()">Fermer</button>`;
 }
+function toggleSaleAge(checked){ state.draft.saleIncludeAge = checked; renderModal(); }
 function switchTab(t){ state.pageAnim=true; state.tab=t; state.vehicleId=null; render(); }
 function openVehicle(id){ state.pageAnim=true; state.vehicleId=id; state.tab='garage'; render(); }
 function goBack(){ state.pageAnim=true; state.vehicleId=null; state.tab='garage'; render(); }
@@ -2289,8 +2389,12 @@ function openModal(name, ctx){
   }
   if(name==='checksAll'){ const v=byId(ctx.vehicleId); const items=(v&&v.checkItems)||[]; state.ctx.checkType = ctx.checkType || (items[0]?items[0].key:null); }
   if(name==='addCheckItem'){ state.draft.itemMode='level'; }
+  if(name==='addHistory'){ state.draft.historyType='other'; }
+  if(name==='addNote'){ state.draft.noteStatus='todo'; state.draft.noteHistoryId=''; }
+  if(name==='editNote'){ const v=byId(ctx.vehicleId); const n=v.notes.find(x=>x.id===ctx.noteId); state.draft.noteStatus=n?n.status:'todo'; state.draft.noteHistoryId=n&&n.historyId?String(n.historyId):''; }
   if(name==='compareVehicles'){ const mine=vehicles.filter(v=>(v.owner||'me')==='me'); state.ctx.cmpA = mine[0] ? mine[0].id : null; state.ctx.cmpB = mine[1] ? mine[1].id : null; }
   if(name==='globalSearch'){ state.searchQuery=''; }
+  if(name==='saleListing'){ state.draft.saleIncludeAge=false; }
   renderModal();
 }
 function closeModal(){ state.modal=null; state.ctx={}; state.draft={}; _confirmCb=null; _choiceA=null; _choiceB=null; renderModal(); }
@@ -2439,7 +2543,7 @@ function confirmMarkDone(){
   const at=num('f-donekm'); const cost=num('f-donecost'); const date=val('f-donedate')||todayISO();
   r.lastDone=at; r.lastDoneDate=date; if(at > v.usage) v.usage = at;
   logUsage(v, at, date);
-  v.history.push({id:++nextId, name:r.name, type:r.type, doneAt:at, unit:unitL(v), date, cost});
+  v.history.push({id:++nextId, name:r.name, type:r.type, doneAt:at, unit:unitL(v), date, cost, partRef:'', invoiceRef:''});
   closeModal(); save(); render(); toast('Entretien enregistré');
 }
 
@@ -2452,7 +2556,24 @@ function saveEditHistory(){
   const v=byId(state.ctx.vehicleId); const h=v.history.find(x=>x.id===state.ctx.historyId);
   const name=val('f-hname'); if(!name){ toast('Donne un intitulé.'); return; }
   h.name=name; h.doneAt=num('f-hat'); h.cost=num('f-hcost'); h.date=val('f-hdate')||h.date;
+  h.partRef=val('f-hpart'); h.invoiceRef=val('f-hinvoice');
   closeModal(); save(); render(); toast('Entretien modifié');
+}
+function saveHistoryEntry(){
+  const v=byId(state.ctx.vehicleId);
+  const name=val('f-newhname'); if(!name){ toast('Donne un intitulé.'); return; }
+  const type=state.draft.historyType||'other';
+  const at=num('f-newhat'); const cost=num('f-newhcost'); const date=val('f-newhdate')||todayISO();
+  const partRef=val('f-newhpart'); const invoiceRef=val('f-newhinvoice');
+  v.history.push({id:++nextId, name, type, doneAt:at, unit:unitL(v), date, cost, partRef, invoiceRef});
+  if(at>0){ if(at>v.usage) v.usage=at; logUsage(v, at, date); }
+  let updated=0;
+  v.recos.forEach(r=>{
+    const chk = document.getElementById('reco-chk-'+r.id);
+    if(chk && chk.checked){ r.lastDone=at; r.lastDoneDate=date; updated++; }
+  });
+  closeModal(); save(); render();
+  toast(updated>0 ? `Entretien ajouté · ${updated} préconisation${updated>1?'s':''} mise${updated>1?'s':''} à jour` : 'Entretien ajouté');
 }
 
 /* deadlines */
@@ -2612,9 +2733,20 @@ function saveNote(){
   const v = byId(state.ctx.vehicleId);
   const text = val('f-notetext').trim(); const date = val('f-notedate')||todayISO();
   if(!text){ toast('Écris une note avant de valider.'); return; }
+  const status = state.draft.noteStatus || 'todo';
+  const hidRaw = val('f-notehistory'); const historyId = hidRaw ? parseInt(hidRaw,10) : null;
   v.notes = v.notes || [];
-  v.notes.push({id:++nextId, text, date});
+  v.notes.push({id:++nextId, text, date, status, historyId});
   closeModal(); save(); render(); toast('Note ajoutée');
+}
+function saveEditNote(){
+  const v = byId(state.ctx.vehicleId); const n = (v.notes||[]).find(x=>x.id===state.ctx.noteId);
+  if(!n) return;
+  const text = val('f-notetext2').trim(); if(!text){ toast('Écris une note avant de valider.'); return; }
+  const hidRaw = val('f-notehistory2');
+  n.text=text; n.date=val('f-notedate2')||n.date; n.status=state.draft.noteStatus||'todo';
+  n.historyId = hidRaw ? parseInt(hidRaw,10) : null;
+  closeModal(); save(); render(); toast('Note modifiée');
 }
 function deleteNote(vid, noteId){
   const v = byId(vid);
@@ -2648,7 +2780,7 @@ function deleteSpec(vid, specId){
 }
 
 /* fiche de vente */
-function buildSaleListing(v){
+function buildSaleListing(v, includeAge){
   const u=unitL(v); const lines=[];
   const title = [v.brand, v.model].filter(x=>x&&x.trim()).join(' ') || (v.name||'').trim() || catLabel(v);
   lines.push(`${title}${v.year?` (${v.year})`:''}`.toUpperCase());
@@ -2662,7 +2794,8 @@ function buildSaleListing(v){
   if(v.history.length){
     lines.push('Entretien suivi :');
     [...v.history].sort((a,b)=> new Date(b.date)-new Date(a.date)).slice(0,6).forEach(h=>{
-      lines.push(`- ${h.name} à ${fmt(h.doneAt)} ${h.unit} (${fmtDate(h.date)})`);
+      const age = includeAge ? ` — il y a ${fmt(Math.max(0, v.usage-h.doneAt))} ${u}` : '';
+      lines.push(`- ${h.name} à ${fmt(h.doneAt)} ${h.unit} (${fmtDate(h.date)})${age}`);
     });
     lines.push('');
   }
@@ -2675,6 +2808,36 @@ function saleCopy(){
   const ta=document.getElementById('sale-ta'); const data=ta?ta.value:'';
   const fb=()=>{ if(ta){ ta.focus(); ta.select(); try{document.execCommand('copy');}catch(e){} } toast('Copié'); };
   if(navigator.clipboard && navigator.clipboard.writeText){ navigator.clipboard.writeText(data).then(()=>toast('Annonce copiée')).catch(fb); } else fb();
+}
+
+/* export historique complet (sans montant) */
+function buildHistoryExport(v){
+  const lines=[];
+  const title = [v.brand, v.model].filter(x=>x&&x.trim()).join(' ') || (v.name||'').trim() || catLabel(v);
+  lines.push(`HISTORIQUE D'ENTRETIEN — ${title}${v.year?` (${v.year})`:''}`.toUpperCase());
+  if(v.plate) lines.push(`Immatriculation : ${v.plate}`);
+  if(v.vin) lines.push(`VIN : ${v.vin}`);
+  lines.push(`${unitName(v)} actuel : ${fmt(v.usage)} ${unitL(v)}`);
+  lines.push('');
+  const groups = groupHistoryByDate(v);
+  if(!groups.length){ lines.push('Aucun entretien enregistré.'); return lines.join('\n'); }
+  groups.forEach(g=>{
+    lines.push(`${fmtDate(g.date)} :`);
+    g.entries.forEach(h=>{
+      const refs = [h.partRef?`pièce : ${h.partRef}`:'', h.invoiceRef?`facture ${h.invoiceRef}`:''].filter(Boolean).join(', ');
+      lines.push(`  - ${h.name} à ${fmt(h.doneAt)} ${h.unit}${refs?` (${refs})`:''}`);
+    });
+  });
+  return lines.join('\n');
+}
+function exportHistoryCopy(){
+  const ta=document.getElementById('history-export-ta'); const data=ta?ta.value:'';
+  const fb=()=>{ if(ta){ ta.focus(); ta.select(); try{document.execCommand('copy');}catch(e){} } toast('Copié'); };
+  if(navigator.clipboard && navigator.clipboard.writeText){ navigator.clipboard.writeText(data).then(()=>toast('Historique copié')).catch(fb); } else fb();
+}
+function exportHistoryDownload(){
+  const v = byId(state.ctx.vehicleId);
+  downloadTextFile(`historique-${(v.brand||v.name||'vehicule').toLowerCase().replace(/\s+/g,'-')}.txt`, buildHistoryExport(v));
 }
 
 /* export */
