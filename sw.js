@@ -2,7 +2,7 @@
    Stratégie : "réseau d'abord" pour la page (toujours la dernière version en
    ligne quand il y a du réseau), "cache d'abord" pour les icônes et les polices
    (rapidité + hors-ligne). Repli complet sur le cache quand hors-ligne. */
-const CACHE = 'pitstop-2.1.0';
+const CACHE = 'pitstop-2.1.1';
 
 const ASSETS = [
   './',
